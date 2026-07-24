@@ -91,8 +91,14 @@ async def registrar_webhook(url: str) -> int:
             print("   servicio openwa y vuelve a intentar.")
         return 1
 
-    print(f"✅ Webhook registrado: {hook.get('id')} → {url}")
-    print(f"   Filtrado a: {', '.join(cfg.remitentes_permitidos)}")
+    verbo = "actualizado" if hook.pop("_actualizado", False) else "registrado"
+    print(f"✅ Webhook {verbo}: {hook.get('id')} → {url}")
+    if cfg.remitentes_permitidos:
+        print(f"   Filtrado a: {', '.join(cfg.remitentes_permitidos)}")
+    else:
+        print("   ⚠️  Sin ALLOWED_SENDERS: OpenWA entregará TODO y el filtrado")
+        print("      queda sólo del lado del agente. Llena la variable y vuelve")
+        print("      a correr esto para filtrar también en la pasarela.")
     return 0
 
 

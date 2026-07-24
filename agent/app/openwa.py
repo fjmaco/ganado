@@ -159,6 +159,10 @@ class ClienteOpenWA:
         The filter runs inside OpenWA, so messages from anyone else are dropped
         before a request is ever made to this service — defence in depth on top
         of the allowlist check in `security.py`.
+
+        Idempotent by URL: re-running this after adding a sender updates the
+        existing subscription instead of leaving two live webhooks behind, which
+        would deliver every message twice.
         """
         http = await self._http()
         cuerpo = {
@@ -177,6 +181,15 @@ class ClienteOpenWA:
                     }
                 ]
             }
+
+        for existente in await self.listar_webhooks():
+            if existente.get("url") == url:
+                r = await http.put(f"/webhooks/{existente['id']}", json=cuerpo)
+                r.raise_for_status()
+                datos = r.json()
+                datos["_actualizado"] = True
+                return datos
+
         r = await http.post("/webhooks", json=cuerpo)
         r.raise_for_status()
         return r.json()

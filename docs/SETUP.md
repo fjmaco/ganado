@@ -64,16 +64,23 @@ mejor que falle al desplegar y no en silencio a las 6am.
 
 ---
 
-## 4. Desplegar y emparejar
+## 4. Emparejar el teléfono
 
-1. **Deploy** en `openwa`, esperar a que quede `done`.
-2. Abrir el dashboard (link de arriba), entrar con la `API_MASTER_KEY` que está
-   en su Environment, y crear una sesión llamada **`pericos`**
-   (tiene que coincidir con `OPENWA_SESSION_ID` del agente).
-3. Escanear el QR con el teléfono del SIM dedicado. Estado → `ready`.
-   *(También existe `POST /api/sessions/pericos/pairing-code` si se prefiere
+`openwa` ya está desplegado y la sesión **`pericos`** ya está creada y
+arrancada, esperando el escaneo.
+
+> **Ojo con el id de sesión.** Las rutas de la API usan el **UUID** que OpenWA
+> asigna al crearla, no su nombre: `/api/sessions/pericos` devuelve `400`.
+> El UUID de esta sesión ya está puesto en `OPENWA_SESSION_ID` del agente.
+> Si alguna vez se recrea la sesión, hay que actualizar esa variable.
+
+1. Abrir el dashboard (link de arriba) y entrar con la `API_MASTER_KEY` que
+   está en el Environment de `openwa`.
+2. Escanear el QR de la sesión `pericos` con el teléfono del SIM dedicado.
+   El estado pasa de `qr_ready` a `ready`.
+   *(También existe `POST /api/sessions/<uuid>/pairing-code` si se prefiere
    teclear un código en vez de escanear.)*
-4. **Deploy** en `agent`.
+3. **Deploy** en `agent` (una vez llenas las variables del punto 3).
 
 ---
 
@@ -98,10 +105,19 @@ python -m scripts.configurar --webhook http://app-program-1080p-interface-ktj5b6
 python -m scripts.configurar --revisar
 ```
 
-> Si el registro del webhook devuelve **400**, casi siempre es la protección
-> SSRF de OpenWA: valida la URL *al registrarla* y rechaza direcciones
-> privadas. `SSRF_ALLOWED_HOSTS` ya trae el `appName` del agente, así que
-> revisar que no se haya cambiado.
+> **El webhook ya está registrado**, pero *sin filtro de remitente*, porque
+> cuando se creó todavía no se sabía el número de mi papá. En cuanto
+> `ALLOWED_SENDERS` tenga valor, hay que volver a correr el comando de arriba:
+> es idempotente por URL, así que **actualiza** el webhook existente en vez de
+> dejar dos vivos entregando cada mensaje por duplicado.
+>
+> Mientras tanto el filtrado existe igual, pero sólo del lado del agente
+> (`security.py` rechaza a cualquiera que no esté en la lista).
+
+> Si el registro devolviera **400**, casi siempre es la protección SSRF de
+> OpenWA: valida la URL *al registrarla* y rechaza direcciones privadas. Ya se
+> comprobó que `SSRF_ALLOWED_HOSTS` deja pasar el `appName` del agente, así que
+> un 400 significaría que ese nombre cambió.
 
 ---
 
