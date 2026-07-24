@@ -173,19 +173,42 @@ puerto 8000 en su pestaña **Domains**.)*
 
 ---
 
-## 7. Desplegar el gateway (sólo para notas de voz)
+## 7. Recargar el gateway (sólo para notas de voz)
 
-**Dokploy → proyecto Personal → servicio `llm` → Deploy.**
+> **Deploy NO alcanza.** LiteLLM lee `config.yaml` una sola vez, al arrancar, y
+> el archivo entra por volumen (`./config.yaml:/app/config.yaml:ro`). Un deploy
+> baja el archivo nuevo al disco pero `docker compose up` no ve cambios en la
+> imagen ni en el compose, así que **no recrea el contenedor** y el proceso
+> sigue con la configuración vieja en memoria. El deploy termina en medio
+> segundo y dice `done`, que es justo lo que despista.
+>
+> Hace falta **Stop y luego Start**. (Es lo mismo que hace el workflow de
+> autoheal del repo `litellm`: *redeploy + stop/start to pull and reload*.)
 
-El cambio ya está en `fjmaco/litellm`; sólo falta que el servicio lo levante.
-Verificar:
+**Dokploy → proyecto Personal → servicio `llm` → Stop → Start.**
+
+Verificar que quedó — el modelo tiene que aparecer en la lista:
 
 ```bash
 curl -s http://llm.lamhara.co/v1/models \
   -H "Authorization: Bearer <LITELLM_MASTER_KEY>" | grep -o transcribe
 ```
 
+Y que de verdad transcribe, no sólo que esté listado:
+
+```bash
+curl -s http://llm.lamhara.co/v1/audio/transcriptions \
+  -H "Authorization: Bearer <LITELLM_MASTER_KEY>" \
+  -F "file=@<un-audio>.ogg" -F "model=transcribe" -F "language=es"
+# -> {"text":"..."}
+```
+
 Todo lo demás funciona sin esto; sólo las notas de voz lo necesitan.
+
+> **Ojo con el silencio.** Whisper *alucina* cuando el audio no trae voz: con un
+> tono puro de prueba devolvió `"¡Gracias!"`. Con ruido de corral puede pasar
+> igual, y es exactamente por eso que `VOZ_REQUIERE_CONFIRMACION=true` viene
+> activado: una nota de voz se lee de vuelta antes de escribir nada.
 
 ---
 
