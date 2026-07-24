@@ -179,6 +179,22 @@ class RepositorioHato:
 
     # -- estructura -------------------------------------------------------
 
+    @staticmethod
+    def _formulas_tabla(sep: str) -> tuple[str, str]:
+        """The `Tabla` formulas, built with a given argument separator."""
+        reg, vac = cfg.hoja_registros, cfg.hoja_vacas
+        pivote = (
+            f'=IFERROR(QUERY(FILTER({reg}!A2:C{sep}{reg}!B2:B<>""{sep}'
+            f'{reg}!F2:F<>TRUE){sep}'
+            f'"select Col2, max(Col3) group by Col2 pivot Col1 label Col2 \'vaca\'"'
+            f'{sep}0){sep}"Aún no hay pesajes")'
+        )
+        nombres = (
+            f'=ARRAYFORMULA(IF(B2:B=""{sep}""{sep}'
+            f'IFERROR(VLOOKUP(B2:B{sep}{vac}!A:B{sep}2{sep}FALSE){sep}"")))'
+        )
+        return pivote, nombres
+
     @_reintento
     def _asegurar_estructura_sync(self) -> None:
         libro = self._abrir()
@@ -192,25 +208,39 @@ class RepositorioHato:
 
         # The wide grid: one row per cow, one column per weighing date. Written
         # once as formulas so it stays live without the bot ever touching it.
-        reg, vac = cfg.hoja_registros, cfg.hoja_vacas
-        pivote = (
-            f'=IFERROR(QUERY(FILTER({reg}!A2:C, {reg}!B2:B<>"", {reg}!F2:F<>TRUE),'
-            f'"select Col2, max(Col3) group by Col2 pivot Col1 label Col2 \'vaca\'",0),'
-            f'"Aún no hay pesajes")'
-        )
-        nombres = (
-            f'=ARRAYFORMULA(IF(B2:B="","",IFERROR(VLOOKUP(B2:B,{vac}!A:B,2,FALSE),"")))'
-        )
-        tabla.update(
-            values=[["nombre"], [nombres]],
-            range_name="A1:A2",
-            value_input_option="USER_ENTERED",
-        )
-        tabla.update(
-            values=[[pivote]],
-            range_name="B1",
-            value_input_option="USER_ENTERED",
-        )
+        #
+        # The argument separator is locale-dependent — ',' in en_US, ';' in
+        # es_ES and most of Europe — and getting it wrong is a *parse* error,
+        # which renders as a bare #ERROR! that IFERROR cannot catch. Rather
+        # than guess from `libro.locale` (a long and drifting list of which
+        # locales use which), write it, read back what the cell actually
+        # rendered, and switch separators if it failed. Empirical and correct
+        # in every locale, including ones that don't exist yet.
+        exito = False
+        for sep in (",", ";"):
+            pivote, nombres = self._formulas_tabla(sep)
+            tabla.update(
+                values=[["nombre"], [nombres]],
+                range_name="A1:A2",
+                value_input_option="USER_ENTERED",
+            )
+            tabla.update(
+                values=[[pivote]],
+                range_name="B1",
+                value_input_option="USER_ENTERED",
+            )
+            if "#ERROR!" not in (tabla.acell("B1").value or ""):
+                log.info("fórmulas de 'Tabla' escritas con separador %r", sep)
+                exito = True
+                break
+            log.info("separador %r no sirve en este locale; probando el otro", sep)
+
+        if not exito:
+            log.error(
+                "no se pudieron escribir las fórmulas de 'Tabla' con ',' ni ';'. "
+                "Los datos en 'Registros' están bien; sólo la vista ancha queda vacía."
+            )
+
         tabla.freeze(rows=1, cols=2)
 
     async def asegurar_estructura(self) -> None:
