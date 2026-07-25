@@ -80,12 +80,20 @@ app = FastAPI(title="Pericos — registro de ganado", version="1.0", lifespan=ci
 @app.get("/health")
 async def health() -> dict:
     cola = await db.profundidad()
+    fallidos = cola.get("fallido", 0)
+    atascados = cola.get("pendiente", 0)
+    ultimo = await db.ultimo_error()
+
+    # "ok" has to mean the pipeline works, not merely that the process is up.
+    # A queue that never drains is a failure even while every request answers.
+    sano = fallidos == 0 and not (atascados and ultimo)
+
     return {
-        "estado": "ok",
+        "estado": "ok" if sano else "degradado",
         "cola": cola,
-        # A growing 'fallido' count is the signal that something needs a human.
-        "fallidos": cola.get("fallido", 0),
+        "fallidos": fallidos,
         "worker": bool(_tarea and not _tarea.done()),
+        "ultimo_error": ultimo,
     }
 
 

@@ -207,6 +207,23 @@ class BaseDatos:
         async with self._lock:
             return await asyncio.to_thread(self._profundidad_sync)
 
+    def _ultimo_error_sync(self) -> dict | None:
+        fila = self._conexion().execute(
+            """SELECT msg_id, estado, intentos, error, actualizado
+               FROM entrantes WHERE error IS NOT NULL
+               ORDER BY actualizado DESC LIMIT 1"""
+        ).fetchone()
+        return dict(fila) if fila else None
+
+    async def ultimo_error(self) -> dict | None:
+        """The most recent processing failure, for /health.
+
+        A health endpoint that reports "ok" while every message silently fails
+        and retries is worse than no health endpoint — it actively misleads.
+        """
+        async with self._lock:
+            return await asyncio.to_thread(self._ultimo_error_sync)
+
     def _recuperar_sync(self) -> int:
         """Re-queue anything left in-flight by a crash or a redeploy."""
         con = self._conexion()
