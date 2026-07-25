@@ -45,30 +45,67 @@ NOMBRES: tuple[str, ...] = (
     "Nidia", "Noelia", "Olimpia", "Perla", "Rosana", "Selena", "Ximena",
 )
 
+# Not every animal in a herd is a cow. A bull calf called Carmen is the kind
+# of detail that makes the whole thing feel like it wasn't built for him.
+NOMBRES_MACHO: tuple[str, ...] = (
+    "Aurelio", "Benito", "Camilo", "Damián", "Emilio", "Fabián", "Gerardo",
+    "Hugo", "Ignacio", "Joaquín", "Leandro", "Marcelo", "Nicolás", "Octavio",
+    "Pablo", "Quintín", "Rafael", "Salvador", "Teodoro", "Ulises", "Valentín",
+    "Andrés", "Bernardo", "Cipriano", "Diego", "Esteban", "Federico", "Gaspar",
+    "Horacio", "Isidro", "Julián", "Lorenzo", "Mauricio", "Norberto", "Ovidio",
+    "Patricio", "Ramiro", "Sebastián", "Tomás", "Urbano", "Vicente", "Alonso",
+    "Baltasar", "Cristóbal", "Domingo", "Eugenio", "Fermín", "Gonzalo",
+    "Hilario", "Isaac", "Justo", "Lucio", "Melchor", "Nemesio", "Onésimo",
+    "Prudencio", "Rómulo", "Simón", "Tadeo", "Venancio",
+)
+
 # Roman-numeral suffixes for the (very unlikely) case of outgrowing the list.
 _SUFIJOS = ("II", "III", "IV", "V", "VI", "VII", "VIII", "IX", "X")
 
+HEMBRA, MACHO = "H", "M"
 
-def asignar_nombre(usados: set[str]) -> str:
+
+def asignar_nombre(usados: set[str], sexo: str = HEMBRA) -> str:
     """Pick the first unused name, in committed order.
 
-    `usados` is every name currently in the Vacas tab. Matching is done on the
-    normalised form so a hand-typed "lucia" still counts as Lucía being taken.
+    `usados` is every name in the Vacas tab — both lists are checked against
+    the same set, so a herd can never end up with a Camilo and a Camila-style
+    collision, and a retired animal's name is never handed to a new one.
     """
     tomados = {normalizar(n) for n in usados if n}
+    lista = NOMBRES_MACHO if sexo == MACHO else NOMBRES
 
-    for nombre in NOMBRES:
+    for nombre in lista:
         if normalizar(nombre) not in tomados:
             return nombre
 
-    # More than ~160 cows: keep going rather than fail, still without duplicates.
+    # More than the whole list: keep going rather than fail, still no duplicates.
     for sufijo in _SUFIJOS:
-        for nombre in NOMBRES:
+        for nombre in lista:
             candidato = f"{nombre} {sufijo}"
             if normalizar(candidato) not in tomados:
                 return candidato
 
     raise RuntimeError("Se agotaron los nombres disponibles para el hato.")
+
+
+# Palabras con las que él distingue el sexo del animal sin pensarlo.
+_MACHOS = ("ternero", "torete", "toro", "novillo", "macho", "becerro", "padrote")
+_HEMBRAS = ("ternera", "novilla", "vaca", "hembra", "vaquilla", "becerra")
+
+
+def sexo_mencionado(texto: str) -> str | None:
+    """Infer the animal's sex from how he referred to it. None = didn't say."""
+    n = normalizar(texto)
+    # Las hembras primero: 'ternera' contiene 'ternera', pero 'ternero' no
+    # debe capturarse por el prefijo de 'ternera'.
+    for palabra in _HEMBRAS:
+        if palabra in n:
+            return HEMBRA
+    for palabra in _MACHOS:
+        if palabra in n:
+            return MACHO
+    return None
 
 
 def buscar_por_nombre(texto: str, vacas: dict[str, str]) -> str | None:

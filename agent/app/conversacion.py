@@ -29,7 +29,7 @@ from . import reportes
 from .config import cfg
 from .db import db
 from .entender import Consulta, Entendido, RegistroDetectado, entender
-from .nombres import buscar_por_nombre
+from .nombres import buscar_por_nombre, sexo_mencionado
 from .sheets import Pesaje, Vaca, hato, numero_canonico
 from .texto import es_afirmativo, es_negativo, solo_digitos
 from .transcribe import ErrorTranscripcion, transcribir_nota
@@ -158,7 +158,10 @@ async def _registrar(
         await db.guardar_pendiente(
             ctx.chat_id, "crear_vaca",
             {"vaca": primera.vaca, "peso": primera.peso,
-             "msg_id": ctx.msg_id, "nota": ctx.nota, "es_voz": ctx.es_voz},
+             "msg_id": ctx.msg_id, "nota": ctx.nota, "es_voz": ctx.es_voz,
+             # Si dijo "ternero" o "novilla", el nombre que le toque debe
+             # concordar. Preguntárselo aparte sería una pregunta de más.
+             "sexo": sexo_mencionado(ctx.texto) or "H"},
         )
         return M.vaca_desconocida(primera.vaca, primera.peso)
 
@@ -230,7 +233,7 @@ async def _resolver_pendiente(ctx: Contexto, pendiente: dict) -> str | None:
 
     if tipo == "crear_vaca":
         numero, peso = datos["vaca"], float(datos["peso"])
-        vaca = await hato.crear_vaca(numero, _hoy())
+        vaca = await hato.crear_vaca(numero, _hoy(), datos.get("sexo", "H"))
         ctx.es_voz = bool(datos.get("es_voz"))
         ctx.nota = datos.get("nota", "")
         hoy = _hoy()

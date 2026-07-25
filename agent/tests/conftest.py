@@ -44,13 +44,13 @@ class FakeHato:
     async def vacas(self, refrescar: bool = False) -> dict[str, Vaca]:
         return dict(self._vacas)
 
-    async def crear_vaca(self, numero: str, hoy: date) -> Vaca:
+    async def crear_vaca(self, numero: str, hoy: date, sexo: str = "H") -> Vaca:
         from app.nombres import asignar_nombre
 
         if numero in self._vacas:
             return self._vacas[numero]
-        nombre = asignar_nombre({v.nombre for v in self._vacas.values() if v.nombre})
-        vaca = Vaca(numero=numero, nombre=nombre, alta=hoy.isoformat())
+        nombre = asignar_nombre({v.nombre for v in self._vacas.values() if v.nombre}, sexo)
+        vaca = Vaca(numero=numero, nombre=nombre, sexo=sexo, alta=hoy.isoformat())
         self._vacas[numero] = vaca
         self.nombres_asignados.append(nombre)
         return vaca

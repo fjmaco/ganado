@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import pytest
+
 from app.nombres import NOMBRES, asignar_nombre, buscar_por_nombre
 from app.texto import normalizar
 
@@ -61,3 +63,54 @@ def test_no_encuentra_nombre_dentro_de_otra_palabra():
 
 def test_sin_coincidencia_devuelve_none():
     assert buscar_por_nombre("477 327", {"477": "Carmen"}) is None
+
+
+# --- machos ----------------------------------------------------------------
+
+def test_un_ternero_no_se_llama_Carmen():
+    """No todo animal del hato es una vaca."""
+    from app.nombres import MACHO, NOMBRES_MACHO
+
+    nombre = asignar_nombre(set(), MACHO)
+    assert nombre in NOMBRES_MACHO
+    assert nombre not in NOMBRES
+
+
+def test_machos_y_hembras_no_chocan():
+    """Un solo espacio de nombres: nadie repite, sea del sexo que sea."""
+    from app.nombres import HEMBRA, MACHO
+
+    usados: set[str] = set()
+    for i in range(100):
+        n = asignar_nombre(usados, MACHO if i % 3 == 0 else HEMBRA)
+        assert normalizar(n) not in {normalizar(u) for u in usados}
+        usados.add(n)
+    assert len(usados) == 100
+
+
+def test_lista_de_machos_sana():
+    from app.nombres import NOMBRES_MACHO
+
+    norm = [normalizar(n) for n in NOMBRES_MACHO]
+    assert len(set(norm)) == len(NOMBRES_MACHO)
+    assert all(" " not in n for n in NOMBRES_MACHO)
+    assert not set(norm) & {normalizar(n) for n in NOMBRES}, "no se cruzan con las hembras"
+
+
+@pytest.mark.parametrize(
+    "texto, esperado",
+    [
+        ("Ternero peso 126", "M"),
+        ("el ternero pesa 126", "M"),
+        ("novillo 5 en 300", "M"),
+        ("el toro 900", "M"),
+        ("la ternera 88 pesa 120", "H"),
+        ("novilla 12 en 250", "H"),
+        ("vaca 309 peso 417", "H"),
+        ("309 417", None),
+    ],
+)
+def test_sexo_segun_como_lo_nombro(texto, esperado):
+    from app.nombres import sexo_mencionado
+
+    assert sexo_mencionado(texto) == esperado

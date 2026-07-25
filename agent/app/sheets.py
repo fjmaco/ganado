@@ -57,7 +57,7 @@ ALCANCES = ("https://www.googleapis.com/auth/spreadsheets",)
 SIN_FORMATO = ValueRenderOption.unformatted
 
 CAB_REGISTROS = ["fecha", "vaca", "peso_kg", "origen", "msg_id", "anulado", "nota"]
-CAB_VACAS = ["vaca", "nombre", "alta", "activa", "baja", "motivo"]
+CAB_VACAS = ["vaca", "nombre", "sexo", "alta", "activa", "baja", "motivo"]
 
 MOTIVOS = {"muerte", "venta", "sacrificio", "robo", "otro"}
 
@@ -96,6 +96,7 @@ _reintento = retry(
 class Vaca:
     numero: str
     nombre: str | None
+    sexo: str = "H"
     alta: str = ""
     activa: bool = True
     baja: str = ""
@@ -405,6 +406,7 @@ class RepositorioHato:
                 alta=str(fila.get("alta") or ""),
                 activa=str(fila.get("activa") or "TRUE").strip().upper()
                 not in {"FALSE", "NO", "0"},
+                sexo=(str(fila.get("sexo") or "H").strip().upper()[:1] or "H"),
                 baja=str(fila.get("baja") or ""),
                 motivo=str(fila.get("motivo") or ""),
             )
@@ -423,15 +425,32 @@ class RepositorioHato:
         return {n: v.nombre for n, v in (await self.vacas()).items() if v.nombre}
 
     @_reintento
-    def _crear_vaca_sync(self, numero: str, nombre: str, alta: str) -> None:
+    @staticmethod
+    def fila_para(hoja: gspread.Worksheet, datos: dict) -> list:
+        """Lay values out in the sheet's ACTUAL column order.
+
+        Never write positionally. `_completar_cabecera` adds new columns at the
+        *end* of an existing sheet, so a tab that has been migrated no longer
+        matches the canonical order in CAB_VACAS — and a positional append
+        silently shifts every value one column across. That is exactly how the
+        first real herd load put "H" into the `alta` column: the data looked
+        plausible, and nothing complained.
+        """
+        cabecera = hoja.row_values(1)
+        return [datos.get(columna, "") for columna in cabecera]
+
+    def _crear_vaca_sync(self, numero: str, nombre: str, sexo: str, alta: str) -> None:
         hoja = self._hoja(cfg.hoja_vacas, CAB_VACAS)
         hoja.append_row(
-            [numero, nombre, alta, "TRUE"],
+            self.fila_para(hoja, {
+                "vaca": numero, "nombre": nombre, "sexo": sexo,
+                "alta": alta, "activa": "TRUE", "baja": "", "motivo": "",
+            }),
             value_input_option="USER_ENTERED",
             table_range="A1",
         )
 
-    async def crear_vaca(self, numero: str, hoy: date) -> Vaca:
+    async def crear_vaca(self, numero: str, hoy: date, sexo: str = "H") -> Vaca:
         """Register a new cow and give her a name nobody else has."""
         numero = numero_canonico(numero)
         vacas = await self.vacas(refrescar=True)
@@ -440,10 +459,12 @@ class RepositorioHato:
 
         # Names of retired cows stay reserved: reusing "Carmen" for a new calf
         # would silently make one animal's history look like another's.
-        nombre = asignar_nombre({v.nombre for v in vacas.values() if v.nombre})
-        await asyncio.to_thread(self._crear_vaca_sync, numero, nombre, hoy.isoformat())
+        nombre = asignar_nombre({v.nombre for v in vacas.values() if v.nombre}, sexo)
+        await asyncio.to_thread(
+            self._crear_vaca_sync, numero, nombre, sexo, hoy.isoformat()
+        )
 
-        nueva = Vaca(numero=numero, nombre=nombre, alta=hoy.isoformat())
+        nueva = Vaca(numero=numero, nombre=nombre, sexo=sexo, alta=hoy.isoformat())
         if self._cache_vacas is not None:
             sello, actuales = self._cache_vacas
             self._cache_vacas = (sello, {**actuales, numero: nueva})
@@ -533,15 +554,11 @@ class RepositorioHato:
     def _registrar_sync(self, p: Pesaje) -> int:
         hoja = self._hoja(cfg.hoja_registros, CAB_REGISTROS)
         respuesta = hoja.append_row(
-            [
-                p.fecha.isoformat(),
-                p.vaca,
-                p.peso,
-                p.origen,
-                p.msg_id,
-                "FALSE",
-                p.nota,
-            ],
+            self.fila_para(hoja, {
+                "fecha": p.fecha.isoformat(), "vaca": p.vaca, "peso_kg": p.peso,
+                "origen": p.origen, "msg_id": p.msg_id, "anulado": "FALSE",
+                "nota": p.nota,
+            }),
             value_input_option="USER_ENTERED",
             insert_data_option="INSERT_ROWS",
             table_range="A1",
