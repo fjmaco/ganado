@@ -27,7 +27,7 @@ from .config import cfg
 from .llm import llm
 from .nombres import buscar_por_nombre
 from .sheets import numero_canonico
-from .texto import normalizar
+from .texto import normalizar, tokenizar
 
 log = logging.getLogger(__name__)
 
@@ -133,6 +133,78 @@ def fast_path(texto: str) -> list[RegistroDetectado] | None:
         registros.append(RegistroDetectado(vaca=vaca, peso=peso))
 
     return registros or None
+
+
+# --------------------------------------------------------------------------
+# Camino rápido para las preguntas de siempre
+# --------------------------------------------------------------------------
+#
+# Mi papá va a preguntar las mismas cinco cosas durante años. Mandarlas a un
+# modelo gratis es cambiar una respuesta segura por una probable: "como va el
+# ganado" salió saludo y "como va el hato" salió "no te entendí", que es
+# justo la clase de inconsistencia que le haría perder la confianza en esto.
+#
+# Todo se compara sobre el texto TOKENIZADO — sin tildes, sin signos, en
+# minúsculas — así que "cómo va el hato", "como va el ganado" y "COMO VA EL
+# GANADO?" son literalmente la misma cadena. Y 'hato', 'ganado' y 'vacas'
+# quieren decir lo mismo, porque para él lo quieren decir.
+
+_HATO = r"(hato|ganado|rebano|vacas|animales|finca|todo)"
+
+# El orden manda: lo específico antes que lo general.
+_REGLAS_CONSULTA: tuple[tuple[str, str], ...] = (
+    (r"\b(ayuda|auxilio|que puedes hacer|como funciona|que sabes hacer|comandos)\b", "ayuda"),
+    (r"^(hola|buenas|buenos dias|buenas tardes|buenas noches|hey|quiubo|que mas)\b", "saludo"),
+    (r"\b(sin pesar|falta[n]? por pesar|falta[n]? pesar|cuales faltan|que falta)\b", "sin_pesar"),
+    (r"\b(bajaron|bajo de peso|perdio peso|perdieron|adelgaz|flaca|alerta)", "alertas"),
+    (r"\b(peor|menos|mas floja|mas flaca)\b.*\b(engord|subi|gan|creci|peso)", "peor_ganancia"),
+    (r"\b(engord|subi|gan|creci)\w*\b.*\b(menos|peor)\b", "peor_ganancia"),
+    (r"\b(mejor|mas)\b.*\b(engord|subi|gan|creci)", "mejor_ganancia"),
+    (r"\b(engord|subi|gan|creci)\w*\b.*\b(mas|mejor)\b", "mejor_ganancia"),
+    (r"\bcuantas?\b.*" + _HATO, "conteo"),
+    # Lo general de último: cualquier "cómo va / cuánto pesa / resumen" del hato.
+    (r"\b(como va|como esta|como estan|como van|resumen|reporte|estado)\b.*" + _HATO, "hato"),
+    (r"\b(peso total|cuanto pesa|cuanto pesan|cual es el peso|total)\b.*" + _HATO, "hato"),
+    (_HATO + r".*\b(como va|como esta|peso total|resumen|reporte|cuanto pesa)\b", "hato"),
+    (r"^(resumen|reporte|informe|estado)$", "hato"),
+)
+
+# "cómo va Carmen" / "cuánto pesa la 477" — una vaca puntual.
+_UNA_VACA = re.compile(
+    r"\b(como va|como esta|como sigue|cuanto pesa|peso de|historial de|"
+    r"como viene|que tal va)\b",
+)
+_VACA_POR_NUMERO = re.compile(r"\b(?:la|el|vaca|numero|nro)\s*(\d{1,5})\b")
+
+
+def fast_path_consulta(texto: str, vacas: dict[str, str]) -> Entendido | None:
+    """Recognise the handful of questions he'll actually ask. None = ask the model."""
+    n = tokenizar(texto)
+    if not n:
+        return None
+
+    def _hecho(intencion: str, consulta: Consulta | None = None) -> Entendido:
+        return Entendido(
+            intencion=intencion, consulta=consulta,
+            confianza=1.0, via="regex", texto=texto,
+        )
+
+    # ¿Pregunta por una vaca en particular?
+    if _UNA_VACA.search(n):
+        if numero := buscar_por_nombre(texto, vacas):
+            return _hecho("consultar", Consulta(tipo="vaca", vaca=numero))
+        if m := _VACA_POR_NUMERO.search(n):
+            numero = numero_canonico(m.group(1))
+            if numero in vacas:
+                return _hecho("consultar", Consulta(tipo="vaca", vaca=numero))
+
+    for patron, tipo in _REGLAS_CONSULTA:
+        if re.search(patron, n):
+            if tipo in {"ayuda", "saludo"}:
+                return _hecho(tipo)
+            return _hecho("consultar", Consulta(tipo=tipo))
+
+    return None
 
 
 # --------------------------------------------------------------------------
@@ -250,8 +322,18 @@ async def entender(texto: str, vacas: dict[str, str], *, es_voz: bool = False) -
             texto=texto,
         )
 
-    # 2. Everything else: ask the model.
-    tier = cfg.tier_extraer_voz if es_voz else cfg.tier_extraer_texto
+    # 2. The questions he asks every month — also no model.
+    if (consulta := fast_path_consulta(texto, vacas)) is not None:
+        return consulta
+
+    # 3. The long tail: ask the model.
+    #
+    # Note the tier. Everything simple was already answered above without a
+    # model, so by construction whatever reaches here is the *hard* case —
+    # unusual phrasing, a mangled transcript, something ambiguous. Sending
+    # only the hard cases to the weakest tier was exactly backwards, and it
+    # showed: identical questions got answered one time and not the next.
+    tier = cfg.tier_extraer_voz if es_voz else cfg.tier_entender
     usuario = f"{_contexto_hato(vacas)}\n\nMensaje del ganadero:\n\"\"\"\n{texto}\n\"\"\""
 
     try:

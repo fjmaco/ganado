@@ -325,11 +325,12 @@ class RepositorioHato:
                 "Los datos en 'Registros' están bien; sólo la vista ancha queda vacía."
             )
 
-        # Sólo la cabecera queda fija. Congelar columnas además hace que el
-        # contenido se deslice POR DEBAJO de ellas al desplazarse, y se lee
-        # igual que si hubiera celdas escondidas — nada que ver con una tabla
-        # que se quiere poder mirar de un vistazo.
-        tabla.freeze(rows=1, cols=0)
+        # Cabecera y las dos primeras columnas fijas: con una fecha por
+        # jornada, nombre y número tienen que seguir a la vista al desplazarse
+        # a la derecha. Al hacerlo el contenido pasa por debajo de esas dos
+        # columnas, que puede parecer que hay celdas escondidas — no las hay,
+        # y `_desocultar` de abajo se asegura de que siga siendo cierto.
+        tabla.freeze(rows=1, cols=2)
         self._desocultar(tabla)
 
     @staticmethod

@@ -12,6 +12,7 @@ when it wasn't.
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import logging
 
 from . import messages as M
@@ -67,9 +68,25 @@ async def bucle(parar: asyncio.Event) -> None:
 
         msg_id = mensaje["msg_id"]
         try:
-            await procesar_uno(mensaje)
+            # A hard ceiling per message. There is one worker, so a call that
+            # never returns doesn't just lose that message — it stops every
+            # message behind it, while /health still reports a live worker.
+            # Timing out turns a silent wedge into an ordinary retry.
+            await asyncio.wait_for(procesar_uno(mensaje), timeout=cfg.timeout_mensaje)
             await db.marcar_hecho(msg_id)
             log.info("mensaje %s procesado", msg_id)
+
+        except asyncio.TimeoutError:
+            log.error("mensaje %s excedió %ds; se reintentará", msg_id, cfg.timeout_mensaje)
+            if await db.reintentar(msg_id, f"timeout tras {cfg.timeout_mensaje}s"):
+                await _avisar_admin(
+                    "un mensaje se quedó colgado",
+                    f"De: {mensaje.get('remitente')}\n"
+                    f"Texto: {(mensaje.get('cuerpo') or '(nota de voz)')[:200]}\n"
+                    f"Excedió {cfg.timeout_mensaje}s en cada intento.",
+                )
+                with contextlib.suppress(Exception):
+                    await openwa.enviar_texto(mensaje["chat_id"], M.ERROR_GUARDANDO)
 
         except Exception as e:  # noqa: BLE001 — every failure is retryable here
             log.exception("fallo procesando %s: %s", msg_id, e)

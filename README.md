@@ -84,14 +84,18 @@ que pedir un tier fija un techo y un tier saturado degrada en vez de fallar.
 
 | Tarea | Tier | Por qué |
 |---|---|---|
-| Extraer vaca+peso de **texto** | `low` | Corto, estructurado, muy validado después |
-| Extraer vaca+peso de una **nota de voz** | `medium` | Muletillas y números deletreados (*trescientos veintisiete*) |
-| Entender una pregunta | `medium` | Mapear lenguaje suelto a un vocabulario fijo |
-| **Frase final del reporte** | `high` | Es lo que él lee; el tono importa |
-| Comentario del hato | `x-high` | Poco frecuente, más valor por llamada |
-| Transcribir voz | `transcribe` | Groq Whisper, `language=es` |
+| Pesajes simples y preguntas de siempre | *(ninguno)* | Los resuelve el camino rápido, sin llamar a nadie |
+| Entender el resto (`TIER_ENTENDER`) | `high` | Es la cola difícil, no el caso fácil — ver abajo |
+| Nota de voz (`TIER_EXTRAER_VOZ`) | `high` | Muletillas y números deletreados (*trescientos veintisiete*) |
+| Frase final del reporte (`TIER_NARRAR`) | `high` | Es lo que él lee; el tono importa |
+| Transcribir voz (`MODELO_TRANSCRIBIR`) | `transcribe` | Groq Whisper, `language=es` |
 
-Cada uno es una variable de entorno: se retunean sin tocar código.
+**El tier de entendimiento no es el barato, y es a propósito.** Los caminos
+rápidos ya contestan los pesajes normales y las preguntas frecuentes sin
+modelo, así que todo lo que *llega* al modelo es, por construcción, lo difícil:
+una frase rara, una transcripción machucada, algo ambiguo. Mandarle sólo los
+casos difíciles al tier más débil está al revés — y se notaba: la misma
+pregunta funcionaba una vez y a la siguiente no.
 
 ## Estructura
 

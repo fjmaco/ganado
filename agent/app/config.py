@@ -63,12 +63,18 @@ class Config:
     # Model tier per task. The gateway falls back downward on its own
     # (x-high -> high -> medium -> low -> lowest), so these set a ceiling and
     # a saturated free tier degrades instead of failing outright.
-    tier_triage: str = field(default_factory=lambda: _str("TIER_TRIAGE", "low"))
-    tier_extraer_texto: str = field(default_factory=lambda: _str("TIER_EXTRAER_TEXTO", "low"))
-    tier_extraer_voz: str = field(default_factory=lambda: _str("TIER_EXTRAER_VOZ", "medium"))
-    tier_consulta: str = field(default_factory=lambda: _str("TIER_CONSULTA", "medium"))
+    #
+    # `tier_entender` is deliberately NOT the cheapest. The deterministic fast
+    # paths in entender.py already answer simple weights and the usual
+    # questions with no model at all, so everything that reaches the model is
+    # the hard tail — odd phrasing, a garbled transcript, real ambiguity.
+    # Pointing only the hard cases at the weakest tier is backwards, and it
+    # showed up as the same question working one time and not the next.
+    tier_entender: str = field(
+        default_factory=lambda: _str("TIER_ENTENDER") or _str("TIER_EXTRAER_TEXTO", "high")
+    )
+    tier_extraer_voz: str = field(default_factory=lambda: _str("TIER_EXTRAER_VOZ", "high"))
     tier_narrar: str = field(default_factory=lambda: _str("TIER_NARRAR", "high"))
-    tier_insight: str = field(default_factory=lambda: _str("TIER_INSIGHT", "x-high"))
     modelo_transcribir: str = field(default_factory=lambda: _str("MODELO_TRANSCRIBIR", "transcribe"))
 
     # --- Google Sheets ----------------------------------------------------
@@ -104,6 +110,11 @@ class Config:
     resumen_hora: int = field(default_factory=lambda: _int("RESUMEN_HORA", 8))
 
     # --- Plumbing ---------------------------------------------------------
+    # Ceiling on one message end to end. Without it a hung provider call wedges
+    # the single worker and the whole queue stops — silently, because the
+    # process is still perfectly healthy.
+    timeout_mensaje: int = field(default_factory=lambda: _int("TIMEOUT_MENSAJE_SEG", 150))
+
     db_path: str = field(default_factory=lambda: _str("DB_PATH", "/data/pericos.db"))
     tz_nombre: str = field(default_factory=lambda: _str("TZ", "America/Bogota"))
     max_intentos: int = field(default_factory=lambda: _int("MAX_INTENTOS", 5))
