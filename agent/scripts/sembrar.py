@@ -165,6 +165,31 @@ async def limpiar() -> int:
     return 0
 
 
+async def vaciar() -> int:
+    """Wipe the herd clean — every cow and every weighing, test or not.
+
+    Separate from `--limpiar` on purpose. That one is surgical and safe to run
+    whenever; this one is for the single moment before handing the bot to my
+    dad, when the sheet still holds whatever I typed while testing. It refuses
+    to run without `--si-estoy-seguro`, because once his real weighings are in
+    there it would be exactly the wrong command.
+    """
+    libro = hato._abrir()
+
+    hoja_reg = libro.worksheet(cfg.hoja_registros)
+    filas_reg = list(range(2, len(hoja_reg.get_all_values()) + 1))
+    borradas = _borrar_filas(hoja_reg, filas_reg)
+
+    hoja_vac = libro.worksheet(cfg.hoja_vacas)
+    filas_vac = list(range(2, len(hoja_vac.get_all_values()) + 1))
+    borradas_v = _borrar_filas(hoja_vac, filas_vac)
+
+    hato.invalidar()
+    print(f"🧨 Hoja vaciada: {borradas} pesajes y {borradas_v} vacas.")
+    print("   Las cabeceras y las fórmulas de 'Tabla' quedan intactas.")
+    return 0
+
+
 async def resumen() -> int:
     vacas = await hato.vacas(refrescar=True)
     registros = await hato.registros(refrescar=True)
@@ -188,9 +213,18 @@ def main() -> int:
     p.add_argument("--sembrar", action="store_true", help="crear 30 vacas × 7 pesajes")
     p.add_argument("--limpiar", action="store_true", help="borrar SÓLO lo sembrado")
     p.add_argument("--resumen", action="store_true", help="qué hay en la hoja")
+    p.add_argument("--vaciar", action="store_true",
+                   help="BORRAR TODO (vacas y pesajes) — pide --si-estoy-seguro")
+    p.add_argument("--si-estoy-seguro", action="store_true", help=argparse.SUPPRESS)
     args = p.parse_args()
 
     async def correr() -> int:
+        if args.vaciar:
+            if not args.si_estoy_seguro:
+                print("🛑 --vaciar borra TODAS las vacas y TODOS los pesajes.")
+                print("   Si es lo que quieres, repítelo con --si-estoy-seguro")
+                return 1
+            return await vaciar()
         if args.limpiar:
             return await limpiar()
         if args.sembrar:
