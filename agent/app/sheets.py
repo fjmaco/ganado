@@ -325,7 +325,33 @@ class RepositorioHato:
                 "Los datos en 'Registros' están bien; sólo la vista ancha queda vacía."
             )
 
-        tabla.freeze(rows=1, cols=2)
+        # Sólo la cabecera queda fija. Congelar columnas además hace que el
+        # contenido se deslice POR DEBAJO de ellas al desplazarse, y se lee
+        # igual que si hubiera celdas escondidas — nada que ver con una tabla
+        # que se quiere poder mirar de un vistazo.
+        tabla.freeze(rows=1, cols=0)
+        self._desocultar(tabla)
+
+    @staticmethod
+    def _desocultar(hoja: gspread.Worksheet) -> None:
+        """Force every row and column visible.
+
+        Belt and braces: nothing here hides anything, but a stray hidden row
+        in this tab would silently drop a cow from the view her owner uses to
+        check on her, and that is not a thing to leave to chance.
+        """
+        hoja.spreadsheet.batch_update({
+            "requests": [
+                {
+                    "updateDimensionProperties": {
+                        "range": {"sheetId": hoja.id, "dimension": eje},
+                        "properties": {"hiddenByUser": False},
+                        "fields": "hiddenByUser",
+                    }
+                }
+                for eje in ("ROWS", "COLUMNS")
+            ]
+        })
 
     async def asegurar_estructura(self) -> None:
         await asyncio.to_thread(self._asegurar_estructura_sync)
