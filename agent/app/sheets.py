@@ -23,10 +23,11 @@ import logging
 import re
 import time
 from dataclasses import dataclass
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 
 import gspread
 from google.oauth2.service_account import Credentials
+from gspread.utils import ValueRenderOption
 from tenacity import (
     retry,
     retry_if_exception,
@@ -41,6 +42,19 @@ from .texto import normalizar
 log = logging.getLogger(__name__)
 
 ALCANCES = ("https://www.googleapis.com/auth/spreadsheets",)
+
+# Read raw values, never what the cell displays.
+#
+# gspread's default reads FORMATTED text and then "numericises" it assuming US
+# conventions. On this sheet (locale es_ES) a weight of 394.7 kg displays as
+# "394,7" and comes back as the integer **3947** — silently inflating every
+# reading tenfold. The stored data was always correct; only the reads were
+# wrong, which is the worst kind of wrong: the spreadsheet looks right while
+# every report and every "peso anterior" is nonsense.
+#
+# Unformatted values are locale-independent: numbers arrive as numbers and
+# dates as serials.
+SIN_FORMATO = ValueRenderOption.unformatted
 
 CAB_REGISTROS = ["fecha", "vaca", "peso_kg", "origen", "msg_id", "anulado", "nota"]
 CAB_VACAS = ["vaca", "nombre", "alta", "activa"]
@@ -106,15 +120,33 @@ def numero_canonico(v: str | int | float | None) -> str:
     return s.upper()
 
 
+# Google Sheets counts days from 1899-12-30 (the Lotus 1-2-3 epoch it inherited).
+EPOCA_SHEETS = date(1899, 12, 30)
+
+
 def _a_fecha(v) -> date | None:
+    """Parse a date from a serial number, a date object, or a string.
+
+    Reads use UNFORMATTED_VALUE, so dates arrive as serial numbers — which is
+    the point: a serial means the same day in every locale, while '05/07/2026'
+    means two different days depending on who is reading it.
+    """
     if isinstance(v, datetime):
         return v.date()
     if isinstance(v, date):
         return v
+    if isinstance(v, (int, float)) and not isinstance(v, bool):
+        try:
+            return EPOCA_SHEETS + timedelta(days=int(v))
+        except (OverflowError, ValueError):
+            return None
+
     s = str(v or "").strip()
     if not s:
         return None
-    for fmt in ("%Y-%m-%d", "%d/%m/%Y", "%m/%d/%Y", "%d-%m-%Y"):
+    # Only reached for text cells someone typed by hand. ISO first: it is the
+    # one format that isn't ambiguous between day-first and month-first.
+    for fmt in ("%Y-%m-%d", "%d/%m/%Y", "%d-%m-%Y", "%m/%d/%Y"):
         try:
             return datetime.strptime(s, fmt).date()
         except ValueError:
@@ -123,10 +155,22 @@ def _a_fecha(v) -> date | None:
 
 
 def _a_float(v) -> float | None:
+    """Read a weight. Numbers pass straight through; text is parsed defensively."""
     if v is None or v == "":
         return None
+    if isinstance(v, (int, float)) and not isinstance(v, bool):
+        return float(v)
+
+    s = str(v).strip()
+    # Hand-typed text, so the separators could be either convention. If both
+    # appear, the last one is the decimal point ("1.234,5" vs "1,234.5").
+    if "," in s and "." in s:
+        s = s.replace(".", "").replace(",", ".") if s.rfind(",") > s.rfind(".") \
+            else s.replace(",", "")
+    elif "," in s:
+        s = s.replace(",", ".")
     try:
-        return float(str(v).replace(",", "."))
+        return float(s)
     except ValueError:
         return None
 
@@ -297,7 +341,9 @@ class RepositorioHato:
     def _leer_vacas_sync(self) -> dict[str, Vaca]:
         hoja = self._hoja(cfg.hoja_vacas, CAB_VACAS)
         vacas: dict[str, Vaca] = {}
-        for fila in hoja.get_all_records(expected_headers=CAB_VACAS):
+        for fila in hoja.get_all_records(
+            expected_headers=CAB_VACAS, value_render_option=SIN_FORMATO
+        ):
             numero = numero_canonico(fila.get("vaca"))
             if not numero:
                 continue
@@ -413,7 +459,10 @@ class RepositorioHato:
         hoja = self._hoja(cfg.hoja_registros, CAB_REGISTROS)
         filas = []
         for i, cruda in enumerate(
-            hoja.get_all_records(expected_headers=CAB_REGISTROS), start=2
+            hoja.get_all_records(
+                expected_headers=CAB_REGISTROS, value_render_option=SIN_FORMATO
+            ),
+            start=2,
         ):
             numero = numero_canonico(cruda.get("vaca"))
             peso = _a_float(cruda.get("peso_kg"))

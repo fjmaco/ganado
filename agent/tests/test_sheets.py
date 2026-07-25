@@ -113,6 +113,74 @@ def test_json_valido_pero_sin_campos(repo, monkeypatch):
         repo._credenciales()
 
 
+# --- lectura de valores: nada puede depender del locale ---------------------
+
+@pytest.mark.parametrize(
+    "entrada, esperado",
+    [
+        (394.7, 394.7),        # número real: pasa derecho
+        (327, 327.0),
+        (0, 0.0),
+        ("394,7", 394.7),      # texto escrito a mano, coma decimal (es_ES)
+        ("394.7", 394.7),      # texto con punto decimal (en_US)
+        ("1.234,5", 1234.5),   # miles con punto, decimal con coma
+        ("1,234.5", 1234.5),   # al revés
+        ("  327  ", 327.0),
+        ("", None),
+        (None, None),
+        ("no es un peso", None),
+    ],
+)
+def test_a_float_es_independiente_del_locale(entrada, esperado):
+    assert S._a_float(entrada) == esperado
+
+
+def test_a_float_no_infla_decimales():
+    """El bug que corrompió los reportes: 394,7 kg leído como 3947 kg.
+
+    gspread numericiza el texto *formateado* asumiendo convenciones de EE.UU.,
+    así que en una hoja es_ES la coma decimal se tomaba como separador de
+    miles. Los datos guardados siempre estuvieron bien; sólo las lecturas
+    salían diez veces más grandes.
+    """
+    assert S._a_float("394,7") == 394.7
+    assert S._a_float("394,7") != 3947
+
+
+@pytest.mark.parametrize(
+    "serial, esperado",
+    [
+        (46047, __import__("datetime").date(2026, 1, 25)),
+        (46227, __import__("datetime").date(2026, 7, 24)),
+        (1, __import__("datetime").date(1899, 12, 31)),
+    ],
+)
+def test_fecha_desde_serial(serial, esperado):
+    """Las lecturas sin formato traen las fechas como serial de Sheets."""
+    assert S._a_fecha(serial) == esperado
+
+
+def test_fecha_desde_iso():
+    import datetime as dt
+
+    assert S._a_fecha("2026-07-24") == dt.date(2026, 7, 24)
+    assert S._a_fecha(dt.date(2026, 7, 24)) == dt.date(2026, 7, 24)
+    assert S._a_fecha(dt.datetime(2026, 7, 24, 10, 30)) == dt.date(2026, 7, 24)
+
+
+def test_fecha_ambigua_prefiere_dia_primero():
+    """05/07/2026 en Colombia es 5 de julio, no 7 de mayo."""
+    import datetime as dt
+
+    assert S._a_fecha("05/07/2026") == dt.date(2026, 7, 5)
+
+
+def test_fecha_invalida():
+    assert S._a_fecha("") is None
+    assert S._a_fecha(None) is None
+    assert S._a_fecha("cualquier cosa") is None
+
+
 # --- normalización de números de vaca --------------------------------------
 
 @pytest.mark.parametrize(
