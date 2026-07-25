@@ -148,17 +148,57 @@ class RepositorioHato:
     # -- conexión ---------------------------------------------------------
 
     def _credenciales(self) -> Credentials:
-        crudo = cfg.google_sa_b64.strip()
+        """Build credentials from GOOGLE_SA_JSON_B64.
+
+        The value is a ~3.1 kB single line pasted by hand into a web form, so
+        it arrives damaged in predictable ways: wrapped across lines, missing
+        its `=` padding, or truncated. The first two are repaired here; the
+        third can't be, so the error reports the length it actually got —
+        which makes a truncated paste obvious instantly instead of looking
+        like a malformed key.
+        """
+        bruto = cfg.google_sa_b64
+        if not bruto.strip():
+            raise ErrorSheets("GOOGLE_SA_JSON_B64 está vacío.")
+
+        # A raw JSON blob is also accepted, for convenience when debugging.
+        if bruto.lstrip().startswith("{"):
+            try:
+                return Credentials.from_service_account_info(
+                    json.loads(bruto), scopes=list(ALCANCES)
+                )
+            except (json.JSONDecodeError, ValueError) as e:
+                raise ErrorSheets(f"GOOGLE_SA_JSON_B64 parece JSON pero no es válido: {e}") from e
+
+        limpio = "".join(bruto.split())          # quita saltos de línea y espacios
+        limpio += "=" * (-len(limpio) % 4)       # repone el relleno que se haya perdido
+
         try:
-            # Accept both base64 and a pasted raw JSON blob.
-            datos = json.loads(crudo) if crudo.startswith("{") else json.loads(
-                base64.b64decode(crudo).decode("utf-8")
-            )
-        except (binascii.Error, UnicodeDecodeError, json.JSONDecodeError) as e:
+            texto = base64.b64decode(limpio).decode("utf-8")
+        except (binascii.Error, UnicodeDecodeError) as e:
             raise ErrorSheets(
-                "GOOGLE_SA_JSON_B64 no es un JSON de service account válido "
-                "(ni en base64 ni en texto plano)."
+                f"GOOGLE_SA_JSON_B64 no se pudo decodificar de base64 "
+                f"(recibí {len(limpio)} caracteres). Suele ser un pegado incompleto: "
+                f"la llave completa son ~3100. Vuelve a pegar la salida de "
+                f"`base64 -w0 <archivo>.json` en una sola línea."
             ) from e
+
+        try:
+            datos = json.loads(texto)
+        except json.JSONDecodeError as e:
+            raise ErrorSheets(
+                f"GOOGLE_SA_JSON_B64 decodificó pero no es JSON completo "
+                f"({len(limpio)} caracteres de base64 → {len(texto)} de texto). "
+                f"Casi seguro quedó cortado al pegarlo: la llave completa son ~3100 "
+                f"caracteres de base64."
+            ) from e
+
+        faltan = {"client_email", "private_key", "token_uri"} - set(datos)
+        if faltan:
+            raise ErrorSheets(
+                f"Al JSON de la service account le faltan campos: {', '.join(sorted(faltan))}."
+            )
+
         return Credentials.from_service_account_info(datos, scopes=list(ALCANCES))
 
     def _abrir(self) -> gspread.Spreadsheet:
