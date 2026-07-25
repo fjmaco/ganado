@@ -58,9 +58,26 @@ def _hoy() -> date:
 async def _escribir(
     ctx: Contexto, vaca: str, peso: float, nombre: str | None, sufijo: str = ""
 ) -> tuple[str, dict | None]:
-    """Append one weighing and build its confirmation. Returns (texto, previo)."""
+    """Record one weighing and build its confirmation. Returns (texto, previo)."""
     hoy = _hoy()
-    previo = await hato.ultimo_pesaje(vaca)
+    # Compare against the last *earlier* day, never against another reading
+    # from today — same-day readings are one weighing session, so the gap
+    # between them is a correction, not growth.
+    previo = await hato.pesaje_anterior_a(vaca, hoy)
+
+    # Already weighed today? Then this replaces it rather than stacking a
+    # second row. He re-weighed her, or mistyped the first one; either way
+    # there is exactly one true weight for this cow on this day.
+    if (de_hoy := await hato.pesaje_del_dia(vaca, hoy)) is not None:
+        anterior = float(de_hoy["peso"])
+        if abs(anterior - peso) < 0.01:
+            return M.registro_repetido(vaca, nombre, peso, hoy), previo
+
+        await hato.actualizar_peso(int(de_hoy["fila"]), peso)
+        await db.guardar_reciente(
+            ctx.chat_id, ctx.msg_id, vaca, peso, int(de_hoy["fila"]), hoy.isoformat()
+        )
+        return M.registro_actualizado(vaca, nombre, anterior, peso, hoy), previo
 
     fila = await hato.registrar(
         Pesaje(
@@ -148,7 +165,9 @@ async def _registrar(
     if len(conocidas) == 1 and not desconocidas:
         reg = conocidas[0]
         vaca = vacas[reg.vaca]
-        previo = await hato.ultimo_pesaje(reg.vaca)
+        # Against the previous *day*: a second reading today is a re-weigh,
+        # and flagging it as a "big change" is both wrong and confusing.
+        previo = await hato.pesaje_anterior_a(reg.vaca, _hoy())
         if not saltar_guardas and _sospechoso(reg.peso, previo):
             await db.guardar_pendiente(
                 ctx.chat_id, "peso_sospechoso",
@@ -165,7 +184,7 @@ async def _registrar(
     lineas: list[str] = []
     for i, reg in enumerate(conocidas):
         vaca = vacas[reg.vaca]
-        previo = await hato.ultimo_pesaje(reg.vaca)
+        previo = await hato.pesaje_anterior_a(reg.vaca, _hoy())
         await _escribir(ctx, reg.vaca, reg.peso, vaca.nombre, sufijo=f"#{i}" if i else "")
         marca = " ⚠️ (cambio grande)" if _sospechoso(reg.peso, previo) else ""
         delta = ""
@@ -235,6 +254,13 @@ async def _resolver_pendiente(ctx: Contexto, pendiente: dict) -> str | None:
         texto, _ = await _escribir(ctx, numero, peso, nombre)
         return texto
 
+    if tipo == "baja_vaca":
+        numero, motivo = datos["vaca"], datos.get("motivo", "otro")
+        hoy = _hoy()
+        await hato.retirar_vaca(numero, motivo, hoy)
+        nombre = vacas[numero].nombre if numero in vacas else None
+        return M.baja_hecha(numero, nombre, motivo, hoy)
+
     if tipo == "confirmar_registros":
         ctx.es_voz = bool(datos.get("es_voz", True))
         ctx.nota = datos.get("nota", "")
@@ -255,6 +281,8 @@ async def _consultar(ctx: Contexto, consulta: Consulta, vacas: dict[str, Vaca]) 
     registros = await hato.registros()
     nombres = {n: (v.nombre or "") for n, v in vacas.items()}
     activas = {n: v.nombre for n, v in vacas.items() if v.activa}
+    # Las de baja conservan su historial pero no cuentan en el hato.
+    activas_set = set(activas)
 
     if not registros:
         return M.SIN_DATOS
@@ -269,7 +297,7 @@ async def _consultar(ctx: Contexto, consulta: Consulta, vacas: dict[str, Vaca]) 
         cuerpo = reportes.texto_vaca(numero, nombre, reportes.historia(registros, numero))
 
     elif tipo in {"mejor_ganancia", "peor_ganancia"}:
-        marco = reportes._marco(registros)
+        marco = reportes.solo_activas(reportes._marco(registros), activas_set)
         gs = reportes.ganancias(marco, nombres, consulta.periodo)
         cuerpo = reportes.texto_ranking(gs, mejor=(tipo == "mejor_ganancia"))
 
@@ -278,12 +306,14 @@ async def _consultar(ctx: Contexto, consulta: Consulta, vacas: dict[str, Vaca]) 
         cuerpo = reportes.texto_sin_pesar(reportes.sin_pesar(marco, activas))
 
     elif tipo == "alertas":
-        marco = reportes._marco(registros)
+        marco = reportes.solo_activas(reportes._marco(registros), activas_set)
         cuerpo = reportes.texto_alertas(reportes.alertas(marco, nombres))
 
     else:  # hato, total, promedio, minimo, maximo, conteo
         cuerpo = reportes.texto_hato(
-            reportes.resumen(registros, nombres, consulta.periodo or "mes")
+            reportes.resumen(
+                registros, nombres, consulta.periodo or "mes", activas=activas_set
+            )
         )
 
     if frase := await reportes.comentario(cuerpo):
@@ -324,6 +354,48 @@ async def _borrar(ctx: Contexto, vacas: dict[str, Vaca]) -> str:
     nombre = vacas[numero].nombre if numero in vacas else None
     fecha = date.fromisoformat(ultimo["fecha"]) if ultimo.get("fecha") else _hoy()
     return M.borrado(numero, nombre, float(ultimo["peso"]), fecha)
+
+
+async def _retirar(ctx: Contexto, ent: Entendido, vacas: dict[str, Vaca]) -> str:
+    """Ask before taking a cow out of the herd — it's not a weight you can retype."""
+    numero = ent.vaca_referida
+    if not numero or numero not in vacas:
+        if numero and numero not in vacas:
+            return f"🤔 No tengo ninguna vaca con el número {numero}. ¿Cuál fue?"
+        return M.cual_vaca_baja()
+
+    vaca = vacas[numero]
+    if not vaca.activa:
+        return M.vaca_ya_de_baja(numero, vaca.nombre, vaca.baja or "antes")
+
+    ultimo = await hato.ultimo_pesaje(numero)
+    await db.guardar_pendiente(
+        ctx.chat_id, "baja_vaca", {"vaca": numero, "motivo": ent.motivo_baja}
+    )
+    return M.confirmar_baja(
+        numero, vaca.nombre, ent.motivo_baja,
+        ultimo_peso=ultimo["peso"] if ultimo else None,
+        fecha_ultimo=ultimo["fecha"] if ultimo else None,
+    )
+
+
+async def _reactivar(ctx: Contexto, ent: Entendido, vacas: dict[str, Vaca]) -> str:
+    numero = ent.vaca_referida
+    if not numero:
+        # La más probable es la última que dimos de baja.
+        bajas = [v for v in vacas.values() if not v.activa and v.baja]
+        if len(bajas) == 1:
+            numero = bajas[0].numero
+        else:
+            return "🤔 ¿Cuál vaca quieres que vuelva al hato? Dime su número o su nombre."
+
+    if numero not in vacas:
+        return f"🤔 No tengo ninguna vaca con el número {numero}."
+    if vacas[numero].activa:
+        return f"ℹ️ {M.etiqueta(numero, vacas[numero].nombre)} ya está activa en el hato."
+
+    await hato.reactivar_vaca(numero)
+    return M.vaca_revivida(numero, vacas[numero].nombre)
 
 
 async def _renombrar(ctx: Contexto, ent: Entendido, vacas: dict[str, Vaca]) -> str:
@@ -398,6 +470,12 @@ async def atender(mensaje: dict) -> str:
 
     if ent.intencion == "borrar":
         return await _borrar(ctx, vacas)
+
+    if ent.intencion == "retirar":
+        return await _retirar(ctx, ent, vacas)
+
+    if ent.intencion == "reactivar":
+        return await _reactivar(ctx, ent, vacas)
 
     if ent.intencion == "renombrar":
         return await _renombrar(ctx, ent, vacas)

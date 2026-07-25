@@ -57,7 +57,9 @@ ALCANCES = ("https://www.googleapis.com/auth/spreadsheets",)
 SIN_FORMATO = ValueRenderOption.unformatted
 
 CAB_REGISTROS = ["fecha", "vaca", "peso_kg", "origen", "msg_id", "anulado", "nota"]
-CAB_VACAS = ["vaca", "nombre", "alta", "activa"]
+CAB_VACAS = ["vaca", "nombre", "alta", "activa", "baja", "motivo"]
+
+MOTIVOS = {"muerte", "venta", "sacrificio", "robo", "otro"}
 
 # 1-indexed columns in Registros, used for targeted single-cell updates.
 COL_PESO = 3
@@ -96,6 +98,8 @@ class Vaca:
     nombre: str | None
     alta: str = ""
     activa: bool = True
+    baja: str = ""
+    motivo: str = ""
 
 
 @dataclass(frozen=True)
@@ -279,11 +283,32 @@ class RepositorioHato:
         )
         return pivote, nombres
 
+    @staticmethod
+    def _completar_cabecera(hoja: gspread.Worksheet, cabecera: list[str]) -> None:
+        """Add any header columns a pre-existing tab is missing.
+
+        `Vacas` gained `baja` and `motivo` after sheets were already in use, so
+        this migrates them in place rather than requiring anyone to rebuild a
+        spreadsheet that holds real history.
+        """
+        actual = hoja.row_values(1)
+        if actual[: len(cabecera)] == cabecera:
+            return
+        faltan = [c for c in cabecera if c not in actual]
+        if not faltan:
+            return
+        if hoja.col_count < len(actual) + len(faltan):
+            hoja.add_cols(len(actual) + len(faltan) - hoja.col_count)
+        hoja.update(
+            values=[actual + faltan], range_name="A1", value_input_option="RAW"
+        )
+        log.info("cabecera de %r ampliada con: %s", hoja.title, ", ".join(faltan))
+
     @_reintento
     def _asegurar_estructura_sync(self) -> None:
         libro = self._abrir()
         self._hoja(cfg.hoja_registros, CAB_REGISTROS)
-        self._hoja(cfg.hoja_vacas, CAB_VACAS)
+        self._completar_cabecera(self._hoja(cfg.hoja_vacas, CAB_VACAS), CAB_VACAS)
 
         try:
             tabla = libro.worksheet("Tabla")
@@ -380,6 +405,8 @@ class RepositorioHato:
                 alta=str(fila.get("alta") or ""),
                 activa=str(fila.get("activa") or "TRUE").strip().upper()
                 not in {"FALSE", "NO", "0"},
+                baja=str(fila.get("baja") or ""),
+                motivo=str(fila.get("motivo") or ""),
             )
         return vacas
 
@@ -411,10 +438,75 @@ class RepositorioHato:
         if numero in vacas:
             return vacas[numero]
 
+        # Names of retired cows stay reserved: reusing "Carmen" for a new calf
+        # would silently make one animal's history look like another's.
         nombre = asignar_nombre({v.nombre for v in vacas.values() if v.nombre})
         await asyncio.to_thread(self._crear_vaca_sync, numero, nombre, hoy.isoformat())
         self._cache_vacas = None
         return Vaca(numero=numero, nombre=nombre, alta=hoy.isoformat())
+
+    @_reintento
+    def _retirar_sync(self, numero: str, motivo: str, cuando: str) -> bool:
+        hoja = self._hoja(cfg.hoja_vacas, CAB_VACAS)
+        cabecera = hoja.row_values(1)
+        try:
+            c_activa = cabecera.index("activa") + 1
+            c_baja = cabecera.index("baja") + 1
+            c_motivo = cabecera.index("motivo") + 1
+        except ValueError:
+            return False
+
+        for i, valor in enumerate(hoja.col_values(1)[1:], start=2):
+            if numero_canonico(valor) == numero:
+                hoja.batch_update([
+                    {"range": gspread.utils.rowcol_to_a1(i, c_activa), "values": [["FALSE"]]},
+                    {"range": gspread.utils.rowcol_to_a1(i, c_baja), "values": [[cuando]]},
+                    {"range": gspread.utils.rowcol_to_a1(i, c_motivo), "values": [[motivo]]},
+                ], value_input_option="USER_ENTERED")
+                return True
+        return False
+
+    async def retirar_vaca(self, numero: str, motivo: str, cuando: date) -> bool:
+        """Take a cow out of the herd without erasing anything she did.
+
+        Her weighings stay in `Registros` — they happened, and a year of gain
+        is worth keeping. She simply stops counting toward herd totals and
+        stops being listed as pending a weighing.
+        """
+        numero = numero_canonico(numero)
+        motivo = motivo if motivo in MOTIVOS else "otro"
+        ok = await asyncio.to_thread(
+            self._retirar_sync, numero, motivo, cuando.isoformat()
+        )
+        self._cache_vacas = None
+        return ok
+
+    @_reintento
+    def _reactivar_sync(self, numero: str) -> bool:
+        hoja = self._hoja(cfg.hoja_vacas, CAB_VACAS)
+        cabecera = hoja.row_values(1)
+        try:
+            c_activa = cabecera.index("activa") + 1
+            c_baja = cabecera.index("baja") + 1
+            c_motivo = cabecera.index("motivo") + 1
+        except ValueError:
+            return False
+
+        for i, valor in enumerate(hoja.col_values(1)[1:], start=2):
+            if numero_canonico(valor) == numero:
+                hoja.batch_update([
+                    {"range": gspread.utils.rowcol_to_a1(i, c_activa), "values": [["TRUE"]]},
+                    {"range": gspread.utils.rowcol_to_a1(i, c_baja), "values": [[""]]},
+                    {"range": gspread.utils.rowcol_to_a1(i, c_motivo), "values": [[""]]},
+                ], value_input_option="USER_ENTERED")
+                return True
+        return False
+
+    async def reactivar_vaca(self, numero: str) -> bool:
+        """Undo a retirement — because it will sometimes be the wrong cow."""
+        ok = await asyncio.to_thread(self._reactivar_sync, numero_canonico(numero))
+        self._cache_vacas = None
+        return ok
 
     @_reintento
     def _renombrar_sync(self, numero: str, nombre: str) -> bool:
@@ -526,6 +618,32 @@ class RepositorioHato:
         if not propios:
             return None
         return max(propios, key=lambda r: (r["fecha"], r["fila"]))
+
+    async def pesaje_del_dia(self, numero: str, dia: date) -> dict | None:
+        """A live weighing already recorded for this cow on this day, if any."""
+        numero = numero_canonico(numero)
+        delhoy = [
+            r for r in await self.registros()
+            if r["vaca"] == numero and r["fecha"] == dia
+        ]
+        return max(delhoy, key=lambda r: r["fila"]) if delhoy else None
+
+    async def pesaje_anterior_a(self, numero: str, dia: date) -> dict | None:
+        """The last weighing from a *different, earlier* day.
+
+        This is the one worth comparing against. Two readings on the same day
+        are the same weighing session — the difference between them is a
+        correction, not growth, and treating it as growth produces nonsense
+        like a cow gaining 333 kg overnight.
+        """
+        numero = numero_canonico(numero)
+        previos = [
+            r for r in await self.registros()
+            if r["vaca"] == numero and r["fecha"] < dia
+        ]
+        if not previos:
+            return None
+        return max(previos, key=lambda r: (r["fecha"], r["fila"]))
 
     async def existe_msg_id(self, msg_id: str) -> bool:
         """Second line of defence against a retried webhook double-logging."""

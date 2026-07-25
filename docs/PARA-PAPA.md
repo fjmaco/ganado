@@ -35,6 +35,36 @@ Solo dile, con tus palabras:
 - `no, eran 445`
 - `borra lo último`
 
+Y si pesas la misma vaca dos veces el mismo día, **el último dato manda** —
+no se anota dos veces. Te avisa que lo cambió:
+
+```
+🔄 Guadalupe (811) ya tenía un pesaje de hoy (666 kg).
+Lo dejé en 999 kg.
+```
+
+---
+
+## Si una vaca sale del hato
+
+- `se murió la 477`
+- `vendí a Carmen`
+- `sacrifiqué la 251`
+- `me robaron la 811`
+
+Te pregunta antes de darla de baja:
+
+```
+¿Doy de baja a Carmen (477)?
+Último pesaje: 578 kg el 24 jul
+Motivo: se murió
+
+Responde SÍ para confirmar.
+```
+
+Deja de contar en el hato y en los totales, **pero sus pesajes viejos no se
+borran**. Si te equivocaste de vaca, dile `revive a Carmen`.
+
 ---
 
 ## Vacas nuevas

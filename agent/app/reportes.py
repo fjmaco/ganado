@@ -162,11 +162,26 @@ def alertas(df: pd.DataFrame, nombres: dict[str, str]) -> list[tuple[str, str | 
     return sorted(salida, key=lambda t: t[2])
 
 
+def solo_activas(df: pd.DataFrame, activas: set[str] | None) -> pd.DataFrame:
+    """Drop retired cows from herd-wide numbers.
+
+    A cow that died or was sold still has real history in `Registros` — that
+    stays. But counting her in the herd total, or in the average, describes a
+    herd that no longer exists.
+    """
+    if activas is None or df.empty:
+        return df
+    return df[df["vaca"].astype(str).isin(activas)]
+
+
 def resumen(
-    registros: list[dict], vacas: dict[str, str], periodo: str | None = "mes"
+    registros: list[dict],
+    vacas: dict[str, str],
+    periodo: str | None = "mes",
+    activas: set[str] | None = None,
 ) -> ResumenHato:
     """The headline numbers for the whole herd."""
-    df = _marco(registros)
+    df = solo_activas(_marco(registros), activas)
     r = ResumenHato(corte=date.today())
     if df.empty:
         return r

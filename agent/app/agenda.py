@@ -35,9 +35,12 @@ async def _construir() -> str:
         return ""
 
     nombres = {n: (v.nombre or "") for n, v in vacas.items()}
-    cuerpo = reportes.texto_hato(reportes.resumen(registros, nombres, periodo="mes"))
+    activas = {n for n, v in vacas.items() if v.activa}
+    cuerpo = reportes.texto_hato(
+        reportes.resumen(registros, nombres, periodo="mes", activas=activas)
+    )
 
-    marco = reportes._marco(registros)
+    marco = reportes.solo_activas(reportes._marco(registros), activas)
     if bajaron := reportes.alertas(marco, nombres):
         cuerpo += "\n\n" + reportes.texto_alertas(bajaron)
 

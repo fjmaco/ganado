@@ -52,8 +52,20 @@ async def test_registra_vaca_conocida(hato_falso):
     assert registros[0]["origen"] == "texto"
 
 
+async def _pesaje_viejo(hato_falso, vaca: str, peso: float, dias: int) -> None:
+    """Un pesaje de hace N días, que es contra lo que se compara de verdad."""
+    import datetime as dt
+
+    from app.sheets import Pesaje
+
+    await hato_falso.registrar(
+        Pesaje(fecha=dt.date.today() - dt.timedelta(days=dias), vaca=vaca,
+               peso=peso, msg_id=f"viejo-{vaca}")
+    )
+
+
 async def test_el_eco_muestra_el_cambio_desde_la_ultima_vez(hato_falso):
-    await atender(_mensaje("477 300", msg_id="m1"))
+    await _pesaje_viejo(hato_falso, "477", 300, dias=30)
     respuesta = await atender(_mensaje("477 330", msg_id="m2"))
 
     assert "Anterior" in respuesta
@@ -128,7 +140,7 @@ async def test_peso_fuera_de_rango_se_rechaza(monkeypatch, hato_falso):
 
 
 async def test_salto_grande_pregunta_antes_de_escribir(hato_falso):
-    await atender(_mensaje("477 300", msg_id="m1"))
+    await _pesaje_viejo(hato_falso, "477", 300, dias=30)
     respuesta = await atender(_mensaje("477 500", msg_id="m2"))
 
     assert "cambio grande" in respuesta or "¿" in respuesta
@@ -136,7 +148,7 @@ async def test_salto_grande_pregunta_antes_de_escribir(hato_falso):
 
 
 async def test_confirmar_el_salto_lo_escribe(hato_falso):
-    await atender(_mensaje("477 300", msg_id="m1"))
+    await _pesaje_viejo(hato_falso, "477", 300, dias=30)
     await atender(_mensaje("477 500", msg_id="m2"))
     respuesta = await atender(_mensaje("sí", msg_id="m3"))
 
@@ -307,3 +319,131 @@ async def test_renombrar_una_vaca(monkeypatch, hato_falso):
     assert "Lucero" in respuesta
     vacas = await hato_falso.vacas()
     assert vacas["477"].nombre == "Lucero"
+
+
+# --- bajas del hato ---------------------------------------------------------
+
+async def test_baja_pregunta_antes_de_hacerla(monkeypatch, hato_falso):
+    _fingir_entendimiento(monkeypatch, Entendido(
+        intencion="retirar", vaca_referida="477", motivo_baja="muerte", confianza=1.0,
+    ))
+    respuesta = await atender(_mensaje("se murió la 477"))
+
+    assert "Carmen" in respuesta and "SÍ" in respuesta
+    vacas = await hato_falso.vacas()
+    assert vacas["477"].activa is True, "no debe darse de baja sin confirmar"
+
+
+async def test_confirmar_da_de_baja_y_conserva_el_historial(monkeypatch, hato_falso):
+    await atender(_mensaje("477 327", msg_id="m0"))
+
+    _fingir_entendimiento(monkeypatch, Entendido(
+        intencion="retirar", vaca_referida="477", motivo_baja="muerte", confianza=1.0,
+    ))
+    await atender(_mensaje("se murió la 477", msg_id="m1"))
+
+    # Un "sí" pelado resuelve la pregunta pendiente antes de llegar a entender().
+    respuesta = await atender(_mensaje("sí", msg_id="m2"))
+
+    vacas = await hato_falso.vacas()
+    assert vacas["477"].activa is False
+    assert vacas["477"].motivo == "muerte"
+    assert "murió" in respuesta
+    # El pesaje sigue ahí: pasó de verdad.
+    assert len(await hato_falso.registros()) == 1
+
+
+async def test_una_vaca_de_baja_no_cuenta_en_el_hato(monkeypatch, hato_falso):
+    monkeypatch.setattr("app.reportes.comentario", lambda *a, **k: _vacio())
+    await atender(_mensaje("477 300", msg_id="m1"))
+    await atender(_mensaje("348 400", msg_id="m2"))
+
+    await hato_falso.retirar_vaca("477", "venta", __import__("datetime").date.today())
+
+    _fingir_entendimiento(monkeypatch, Entendido(
+        intencion="consultar", consulta=Consulta(tipo="hato"), confianza=1.0,
+    ))
+    respuesta = await atender(_mensaje("como va el hato", msg_id="m3"))
+
+    assert "400" in respuesta
+    assert "700" not in respuesta, "la vendida no puede seguir sumando"
+    assert "1 vaca" in respuesta
+
+
+async def test_baja_sin_saber_cual_vaca(monkeypatch, hato_falso):
+    _fingir_entendimiento(monkeypatch, Entendido(
+        intencion="retirar", vaca_referida=None, motivo_baja="muerte", confianza=1.0,
+    ))
+    respuesta = await atender(_mensaje("Se me murió una vaca"))
+    assert "Cuál vaca" in respuesta or "cuál vaca" in respuesta.lower()
+
+
+async def test_revivir_una_vaca(monkeypatch, hato_falso):
+    import datetime as dt
+
+    await hato_falso.retirar_vaca("477", "muerte", dt.date.today())
+
+    _fingir_entendimiento(monkeypatch, Entendido(
+        intencion="reactivar", vaca_referida="477", confianza=1.0,
+    ))
+    respuesta = await atender(_mensaje("revive a Carmen"))
+
+    vacas = await hato_falso.vacas()
+    assert vacas["477"].activa is True
+    assert "Carmen" in respuesta
+
+
+async def test_dar_de_baja_dos_veces(monkeypatch, hato_falso):
+    import datetime as dt
+
+    await hato_falso.retirar_vaca("477", "muerte", dt.date.today())
+    _fingir_entendimiento(monkeypatch, Entendido(
+        intencion="retirar", vaca_referida="477", motivo_baja="muerte", confianza=1.0,
+    ))
+    respuesta = await atender(_mensaje("se murió la 477"))
+    assert "ya estaba" in respuesta
+
+
+# --- dos pesajes el mismo día ----------------------------------------------
+
+async def test_segundo_pesaje_del_dia_reemplaza_al_primero(hato_falso):
+    """Bajó el ganado una vez: hay un solo peso verdadero por vaca y por día."""
+    await atender(_mensaje("477 666", msg_id="m1"))
+    respuesta = await atender(_mensaje("477 999", msg_id="m2"))
+
+    registros = await hato_falso.registros()
+    assert len(registros) == 1, "no debe quedar una fila duplicada del mismo día"
+    assert registros[0]["peso"] == 999
+    assert "666" in respuesta and "999" in respuesta
+
+
+async def test_repetir_el_mismo_peso_no_cambia_nada(hato_falso):
+    await atender(_mensaje("477 666", msg_id="m1"))
+    respuesta = await atender(_mensaje("477 666", msg_id="m2"))
+
+    assert len(await hato_falso.registros()) == 1
+    assert "ya estaba anotada" in respuesta
+
+
+async def test_repesar_el_mismo_dia_no_dispara_la_alerta_de_salto(hato_falso):
+    """666 -> 999 el mismo día es una corrección, no un engorde sospechoso."""
+    await atender(_mensaje("477 666", msg_id="m1"))
+    respuesta = await atender(_mensaje("477 999", msg_id="m2"))
+
+    assert "cambio grande" not in respuesta
+    assert (await hato_falso.registros())[0]["peso"] == 999
+
+
+async def test_el_salto_se_mide_contra_el_dia_anterior(hato_falso):
+    """La comparación real sigue viva: ayer 300, hoy 500 sí se pregunta."""
+    import datetime as dt
+
+    from app.sheets import Pesaje
+
+    ayer = dt.date.today() - dt.timedelta(days=1)
+    await hato_falso.registrar(Pesaje(fecha=ayer, vaca="477", peso=300, msg_id="viejo"))
+
+    respuesta = await atender(_mensaje("477 500", msg_id="m1"))
+    assert "cambio grande" in respuesta or "¿" in respuesta
+    # Sigue habiendo sólo el de ayer: el de hoy espera confirmación.
+    assert len(await hato_falso.registros()) == 1

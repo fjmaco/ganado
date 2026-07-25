@@ -8,7 +8,13 @@ from __future__ import annotations
 
 import pytest
 
-from app.entender import Entendido, entender, fast_path, fast_path_consulta
+from app.entender import (
+    Entendido,
+    entender,
+    fast_path,
+    fast_path_baja,
+    fast_path_consulta,
+)
 
 
 # Messages that are unambiguously cow/weight pairs.
@@ -243,3 +249,56 @@ async def test_las_preguntas_no_llaman_al_modelo(monkeypatch):
     assert ent.intencion == "consultar"
     assert ent.consulta.tipo == "hato"
     assert ent.via == "regex"
+
+
+# --- bajas del hato ---------------------------------------------------------
+
+@pytest.mark.parametrize(
+    "mensaje, numero, motivo",
+    [
+        ("se murio la 477", "477", "muerte"),
+        ("se me murió Carmen", "101", "muerte"),
+        ("amaneció muerta la 101", "101", "muerte"),
+        ("vendí la 477", "477", "venta"),
+        ("se vendió Carmen", "101", "venta"),
+        ("sacrifiqué la 251", "251", "sacrificio"),
+        ("me robaron la 477", "477", "robo"),
+        ("da de baja la 101", "101", "otro"),
+        ("quita la 477", "477", "otro"),
+    ],
+)
+def test_baja_reconoce_vaca_y_motivo(mensaje, numero, motivo):
+    ent = fast_path_baja(mensaje, VACAS_PRUEBA)
+    assert ent is not None and ent.intencion == "retirar"
+    assert ent.vaca_referida == numero
+    assert ent.motivo_baja == motivo
+
+
+def test_baja_sin_decir_cual_vaca():
+    """'Se me murió una vaca' se entiende, aunque falte saber cuál."""
+    ent = fast_path_baja("Se me murió una vaca", VACAS_PRUEBA)
+    assert ent is not None and ent.intencion == "retirar"
+    assert ent.motivo_baja == "muerte"
+    assert ent.vaca_referida is None
+
+
+@pytest.mark.parametrize(
+    "mensaje", ["revive a Carmen", "reactiva la 477", "no se murió, era otra"]
+)
+def test_reactivar(mensaje):
+    ent = fast_path_baja(mensaje, VACAS_PRUEBA)
+    assert ent is not None and ent.intencion == "reactivar"
+
+
+@pytest.mark.parametrize("mensaje", ["477 327", "como va el hato", "no, eran 445"])
+def test_lo_que_no_es_baja(mensaje):
+    assert fast_path_baja(mensaje, VACAS_PRUEBA) is None
+
+
+async def test_una_baja_no_llama_al_modelo(monkeypatch):
+    async def explotar(*a, **k):
+        raise AssertionError("no debió llamarse al modelo")
+
+    monkeypatch.setattr("app.entender.llm.chat_json", explotar)
+    ent = await entender("se murió la 477", VACAS_PRUEBA)
+    assert ent.intencion == "retirar" and ent.via == "regex"

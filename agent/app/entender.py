@@ -34,7 +34,7 @@ log = logging.getLogger(__name__)
 # Intents the rest of the app knows how to handle.
 INTENCIONES = {
     "registrar", "consultar", "corregir", "borrar",
-    "renombrar", "saludo", "ayuda", "otro",
+    "renombrar", "retirar", "reactivar", "saludo", "ayuda", "otro",
 }
 
 # Report kinds `reportes.py` implements.
@@ -80,6 +80,7 @@ class Entendido:
     peso_correccion: float | None = None
     nombre_nuevo: str | None = None
     vaca_referida: str | None = None
+    motivo_baja: str = "otro"
     confianza: float = 0.0
     via: str = "llm"          # "regex" | "llm" — for logging and tests
     texto: str = ""
@@ -175,6 +176,57 @@ _UNA_VACA = re.compile(
     r"como viene|que tal va)\b",
 )
 _VACA_POR_NUMERO = re.compile(r"\b(?:la|el|vaca|numero|nro)\s*(\d{1,5})\b")
+
+
+# Dar de baja una vaca. El motivo importa: para un ganadero no es lo mismo
+# que una vaca se muera a que la venda, y la hoja se lo guarda.
+_BAJAS: tuple[tuple[str, str], ...] = (
+    (r"\b(se murio|murio|se me murio|se murieron|muerta|amanecio muerta|fallecio|se cayo y murio)\b", "muerte"),
+    (r"\b(vendi|se vendio|la vendi|vendida|venta de)\b", "venta"),
+    (r"\b(sacrifi|mate|la mate|mataron|para carne|al matadero)", "sacrificio"),
+    (r"\b(se perdio|se robaron|robaron|me robaron|hurtaron)\b", "robo"),
+    (r"\b(da de baja|dar de baja|quita|quitar|elimina|eliminar|saca|sacar|retira|retirar)\b", "otro"),
+)
+_REVIVIR = re.compile(
+    r"\b(revive|revivir|reactiva|reactivar|sigue viva|esta viva|no se murio|"
+    r"me equivoque.*baja|era otra)\b"
+)
+
+
+def _vaca_mencionada(texto: str, n: str, vacas: dict[str, str]) -> str | None:
+    """Which cow is he talking about — by name or by number."""
+    if numero := buscar_por_nombre(texto, vacas):
+        return numero
+    if m := _VACA_POR_NUMERO.search(n):
+        return numero_canonico(m.group(1))
+    # Un número suelto, cuando no hay nada más que confundirlo.
+    sueltos = re.findall(r"\b(\d{1,5})\b", n)
+    if len(sueltos) == 1:
+        return numero_canonico(sueltos[0])
+    return None
+
+
+def fast_path_baja(texto: str, vacas: dict[str, str]) -> Entendido | None:
+    """Recognise a cow leaving the herd. None = not about that."""
+    n = tokenizar(texto)
+    if not n:
+        return None
+
+    if _REVIVIR.search(n):
+        return Entendido(
+            intencion="reactivar", vaca_referida=_vaca_mencionada(texto, n, vacas),
+            confianza=1.0, via="regex", texto=texto,
+        )
+
+    for patron, motivo in _BAJAS:
+        if re.search(patron, n):
+            return Entendido(
+                intencion="retirar",
+                vaca_referida=_vaca_mencionada(texto, n, vacas),
+                motivo_baja=motivo,
+                confianza=1.0, via="regex", texto=texto,
+            )
+    return None
 
 
 def fast_path_consulta(texto: str, vacas: dict[str, str]) -> Entendido | None:
@@ -322,11 +374,16 @@ async def entender(texto: str, vacas: dict[str, str], *, es_voz: bool = False) -
             texto=texto,
         )
 
-    # 2. The questions he asks every month — also no model.
+    # 2. A cow leaving the herd. Before the questions, because "se murió" must
+    #    never be mistaken for anything else.
+    if (baja := fast_path_baja(texto, vacas)) is not None:
+        return baja
+
+    # 3. The questions he asks every month — also no model.
     if (consulta := fast_path_consulta(texto, vacas)) is not None:
         return consulta
 
-    # 3. The long tail: ask the model.
+    # 4. The long tail: ask the model.
     #
     # Note the tier. Everything simple was already answered above without a
     # model, so by construction whatever reaches here is the *hard* case —

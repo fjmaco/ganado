@@ -76,6 +76,22 @@ def registro_ok(numero, nombre, peso, cuando, peso_previo=None,
     return "\n".join(lineas)
 
 
+def registro_actualizado(numero, nombre, antes, ahora, cuando) -> str:
+    """He weighed her twice the same day — the second reading wins."""
+    return (
+        f"🔄 {etiqueta(numero, nombre)} ya tenía un pesaje de hoy "
+        f"({fmt_kg(antes)} kg). Lo dejé en *{fmt_kg(ahora)} kg*.\n\n"
+        f"_Un solo dato por día: el nuevo reemplaza al anterior._"
+    )
+
+
+def registro_repetido(numero, nombre, peso, cuando) -> str:
+    return (
+        f"👍 {etiqueta(numero, nombre)} ya estaba anotada hoy con "
+        f"{fmt_kg(peso)} kg. No cambié nada."
+    )
+
+
 def registro_multiple(resumen: list[str]) -> str:
     return "✅ Anoté estos pesajes:\n\n" + "\n".join(resumen) + "\n\nSi algo está mal, solo dime."
 
@@ -101,6 +117,56 @@ def vaca_creada(numero, nombre, peso, cuando) -> str:
 
 def vaca_renombrada(numero, antes, ahora) -> str:
     return f"✏️ Listo: la vaca {numero} ya no se llama {antes}, ahora es *{ahora}*."
+
+
+# --------------------------------------------------------------------------
+# Bajas del hato
+# --------------------------------------------------------------------------
+
+VERBO_BAJA = {
+    "muerte": "se murió",
+    "venta": "se vendió",
+    "sacrificio": "se sacrificó",
+    "robo": "se perdió",
+    "otro": "salió del hato",
+}
+
+
+def confirmar_baja(numero, nombre, motivo, ultimo_peso=None, fecha_ultimo=None) -> str:
+    lineas = [f"¿Doy de baja a *{etiqueta(numero, nombre)}*?", ""]
+    if ultimo_peso is not None:
+        lineas.append(f"Último pesaje: {fmt_kg(ultimo_peso)} kg el {fecha_corta(fecha_ultimo)}")
+    lineas += [
+        f"Motivo: {VERBO_BAJA.get(motivo, 'salió del hato')}",
+        "",
+        "Responde *SÍ* para confirmar.",
+        "_Sus pesajes anteriores no se borran; sólo deja de contar en el hato._",
+    ]
+    return "\n".join(lineas)
+
+
+def baja_hecha(numero, nombre, motivo, cuando) -> str:
+    return (
+        f"🕊️ Listo. {etiqueta(numero, nombre)} {VERBO_BAJA.get(motivo, 'salió del hato')} "
+        f"y ya no cuenta en el hato (baja: {fecha_corta(cuando)}).\n\n"
+        f"Su historial queda guardado. Si me equivoqué, dime "
+        f"_revive a {nombre or numero}_."
+    )
+
+
+def vaca_revivida(numero, nombre) -> str:
+    return f"↩️ Listo, {etiqueta(numero, nombre)} vuelve a contar en el hato."
+
+
+def cual_vaca_baja() -> str:
+    return (
+        "😔 Lo siento. ¿Cuál vaca fue?\n\n"
+        "Dime su número o su nombre, por ejemplo _se murió la 477_ o _se murió Carmen_."
+    )
+
+
+def vaca_ya_de_baja(numero, nombre, cuando) -> str:
+    return f"ℹ️ {etiqueta(numero, nombre)} ya estaba dada de baja ({cuando})."
 
 
 # --------------------------------------------------------------------------
@@ -198,6 +264,11 @@ AYUDA = (
     "• _¿cómo va Carmen?_\n"
     "• _¿cuáles faltan por pesar?_\n\n"
     "*Si me equivoco*, dime _no, eran 445_ o _borra lo último_.\n\n"
+    "*Si una vaca sale del hato:*\n"
+    "• _se murió la 477_\n"
+    "• _vendí a Carmen_\n"
+    "• _sacrifiqué la 251_\n"
+    "Te pregunto antes de darla de baja, y sus pesajes viejos no se borran.\n\n"
     "Cada vaca tiene nombre, así que también puedes decirme "
     "_Carmen pesa 430_ en vez del número."
 )

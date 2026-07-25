@@ -55,6 +55,21 @@ class FakeHato:
         self.nombres_asignados.append(nombre)
         return vaca
 
+    async def retirar_vaca(self, numero: str, motivo: str, cuando) -> bool:
+        if numero not in self._vacas:
+            return False
+        v = self._vacas[numero]
+        self._vacas[numero] = Vaca(numero=v.numero, nombre=v.nombre, alta=v.alta,
+                                   activa=False, baja=cuando.isoformat(), motivo=motivo)
+        return True
+
+    async def reactivar_vaca(self, numero: str) -> bool:
+        if numero not in self._vacas:
+            return False
+        v = self._vacas[numero]
+        self._vacas[numero] = Vaca(numero=v.numero, nombre=v.nombre, alta=v.alta, activa=True)
+        return True
+
     async def renombrar(self, numero: str, nombre: str) -> bool:
         if numero not in self._vacas:
             return False
@@ -82,6 +97,18 @@ class FakeHato:
             return None
         return max(propios, key=lambda r: (r["fecha"], r["fila"]))
 
+    async def pesaje_del_dia(self, numero: str, dia):
+        delhoy = [r for r in self._registros
+                  if r["vaca"] == numero and r["fecha"] == dia and not r["anulado"]]
+        return max(delhoy, key=lambda r: r["fila"]) if delhoy else None
+
+    async def pesaje_anterior_a(self, numero: str, dia):
+        previos = [r for r in self._registros
+                   if r["vaca"] == numero and r["fecha"] < dia and not r["anulado"]]
+        if not previos:
+            return None
+        return max(previos, key=lambda r: (r["fecha"], r["fila"]))
+
     async def actualizar_peso(self, fila: int, peso: float) -> None:
         for r in self._registros:
             if r["fila"] == fila:
@@ -103,6 +130,26 @@ class FakeOpenWA:
 
     async def marcar_escribiendo(self, chat_id: str) -> None:
         return None
+
+
+@pytest.fixture(autouse=True)
+def sin_red(monkeypatch):
+    """No test may reach the real gateway.
+
+    One of these quietly started calling llm.lamhara.co for real and only
+    surfaced as a 400 in the logs. A suite that depends on a free API being up
+    isn't testing the code, it's testing the weather — so the default is a
+    hard failure, and any test that wants model behaviour stubs it explicitly.
+    """
+    async def prohibido(*a, **k):
+        raise AssertionError(
+            "una prueba intentó llamar al gateway de verdad; "
+            "hay que simular el modelo (monkeypatch de llm.chat / llm.chat_json)"
+        )
+
+    monkeypatch.setattr("app.llm.llm.chat", prohibido)
+    monkeypatch.setattr("app.llm.llm.chat_json", prohibido)
+    monkeypatch.setattr("app.llm.llm.transcribir", prohibido)
 
 
 @pytest.fixture
