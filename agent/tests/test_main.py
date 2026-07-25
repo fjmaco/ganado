@@ -130,3 +130,33 @@ def test_reentrega_del_mismo_mensaje_sigue_dando_202(cliente):
     """OpenWA reintenta; la segunda vez no debe crear otro pesaje."""
     assert _enviar(cliente, _evento()).status_code == 202
     assert _enviar(cliente, _evento()).status_code == 202
+
+
+# --- cola de fallidos ------------------------------------------------------
+
+def test_fallidos_requiere_api_key(cliente):
+    assert cliente.get("/fallidos").status_code == 401
+    assert cliente.post("/fallidos/descartar").status_code == 401
+
+
+def test_fallidos_con_api_key(cliente):
+    cab = {"X-API-Key": cfg.openwa_api_key}
+    r = cliente.get("/fallidos", headers=cab)
+    assert r.status_code == 200
+    assert r.json() == {"fallidos": []}
+
+
+def test_descartar_limpia_el_estado_degradado(cliente):
+    """Un fallo permanente no puede dejar /health en rojo para siempre."""
+    cab = {"X-API-Key": cfg.openwa_api_key}
+    _enviar(cliente, _evento())
+
+    con = cliente.base._conexion()
+    con.execute("UPDATE entrantes SET estado='fallido', error='boom'")
+    con.commit()
+
+    assert cliente.get("/health").json()["estado"] == "degradado"
+    assert len(cliente.get("/fallidos", headers=cab).json()["fallidos"]) == 1
+
+    assert cliente.post("/fallidos/descartar", headers=cab).json() == {"descartados": 1}
+    assert cliente.get("/health").json()["estado"] == "ok"

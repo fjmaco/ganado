@@ -224,6 +224,36 @@ class BaseDatos:
         async with self._lock:
             return await asyncio.to_thread(self._ultimo_error_sync)
 
+    def _fallidos_sync(self) -> list[dict]:
+        filas = self._conexion().execute(
+            """SELECT msg_id, remitente, tipo, cuerpo, intentos, error, creado
+               FROM entrantes WHERE estado = ? ORDER BY creado""",
+            (FALLIDO,),
+        ).fetchall()
+        return [dict(f) for f in filas]
+
+    async def fallidos(self) -> list[dict]:
+        async with self._lock:
+            return await asyncio.to_thread(self._fallidos_sync)
+
+    def _descartar_fallidos_sync(self) -> int:
+        con = self._conexion()
+        cur = con.execute("DELETE FROM entrantes WHERE estado = ?", (FALLIDO,))
+        con.commit()
+        return cur.rowcount
+
+    async def descartar_fallidos(self) -> int:
+        """Drop dead-lettered messages after a human has looked at them.
+
+        Without this the health signal latches: one permanent failure leaves
+        /health 'degradado' forever, and a warning that never clears is a
+        warning nobody reads. Discarding is the right verb rather than
+        retrying — by the time someone reviews it, the message has usually
+        been re-sent by hand, so a retry would duplicate the entry.
+        """
+        async with self._lock:
+            return await asyncio.to_thread(self._descartar_fallidos_sync)
+
     def _recuperar_sync(self) -> int:
         """Re-queue anything left in-flight by a crash or a redeploy."""
         con = self._conexion()

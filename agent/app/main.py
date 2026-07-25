@@ -9,10 +9,11 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import hmac
 import logging
 from collections.abc import AsyncIterator
 
-from fastapi import FastAPI, Header, Request, Response, status
+from fastapi import FastAPI, Header, HTTPException, Request, Response, status
 
 from . import agenda, worker
 from .config import cfg
@@ -95,6 +96,30 @@ async def health() -> dict:
         "worker": bool(_tarea and not _tarea.done()),
         "ultimo_error": ultimo,
     }
+
+
+def _exigir_clave(x_api_key: str | None) -> None:
+    """Guard for the operational endpoints. Constant-time comparison."""
+    if not x_api_key or not hmac.compare_digest(x_api_key, cfg.openwa_api_key):
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED)
+
+
+@app.get("/fallidos")
+async def listar_fallidos(x_api_key: str | None = Header(default=None)) -> dict:
+    """Dead-lettered messages, so a failure can be read without shell access."""
+    _exigir_clave(x_api_key)
+    return {"fallidos": await db.fallidos()}
+
+
+@app.post("/fallidos/descartar")
+async def descartar_fallidos(x_api_key: str | None = Header(default=None)) -> dict:
+    """Clear the dead-letter queue once someone has reviewed it.
+
+    Authenticated: it discards the record of something that did not save, and
+    that should never be something an anonymous request can do.
+    """
+    _exigir_clave(x_api_key)
+    return {"descartados": await db.descartar_fallidos()}
 
 
 @app.post("/webhook/openwa")
