@@ -15,7 +15,7 @@ from collections.abc import AsyncIterator
 
 from fastapi import FastAPI, Header, HTTPException, Request, Response, status
 
-from . import agenda, worker
+from . import agenda, sesion, worker
 from .config import cfg
 from .db import db
 from .openwa import openwa
@@ -89,11 +89,16 @@ async def health() -> dict:
     # A queue that never drains is a failure even while every request answers.
     sano = fallidos == 0 and not (atascados and ultimo)
 
+    whatsapp = await sesion.estado_actual()
+    if not whatsapp["conectada"]:
+        sano = False
+
     return {
         "estado": "ok" if sano else "degradado",
         "cola": cola,
         "fallidos": fallidos,
         "worker": bool(_tarea and not _tarea.done()),
+        "whatsapp": whatsapp,
         "ultimo_error": ultimo,
     }
 
@@ -138,10 +143,16 @@ async def webhook(
     except Exception:  # noqa: BLE001
         return Response(status_code=status.HTTP_400_BAD_REQUEST)
 
-    if evento.get("event") != "message.received":
+    tipo_evento = evento.get("event")
+    datos = evento.get("data") or {}
+
+    # Session lifecycle: the failure that would otherwise be silent.
+    if tipo_evento and tipo_evento.startswith("session."):
+        await sesion.registrar_evento(tipo_evento, datos)
         return Response(status_code=status.HTTP_204_NO_CONTENT)
 
-    datos = evento.get("data") or {}
+    if tipo_evento != "message.received":
+        return Response(status_code=status.HTTP_204_NO_CONTENT)
 
     # Ignore our own echoes, groups, and status broadcasts.
     if datos.get("fromMe") or datos.get("isGroup") or datos.get("kind") not in (None, "individual"):

@@ -57,7 +57,7 @@ def etiqueta(numero: str, nombre: str | None) -> str:
 # --------------------------------------------------------------------------
 
 def registro_ok(numero, nombre, peso, cuando, peso_previo=None,
-                fecha_previa=None, gramos_dia=None) -> str:
+                fecha_previa=None, gramos_dia=None, objetivo=0) -> str:
     lineas = [f"✅ {etiqueta(numero, nombre)} · {fmt_kg(peso)} kg · {fecha_dia(cuando)}"]
 
     if peso_previo is not None and fecha_previa is not None:
@@ -70,6 +70,19 @@ def registro_ok(numero, nombre, peso, cuando, peso_previo=None,
             lineas.append("⚠️ Bajó de peso desde la última vez.")
     else:
         lineas.append("Primer pesaje registrado.")
+
+    # El dato por el que pesa: qué tan cerca está de venderse.
+    if objetivo and objetivo > 0:
+        falta = objetivo - peso
+        if falta <= 0:
+            lineas.append(f"🎯 *Ya está en peso de venta* ({fmt_kg(objetivo)} kg).")
+        else:
+            aviso = f"🎯 Le faltan {fmt_kg(falta)} kg para los {fmt_kg(objetivo)}."
+            if gramos_dia and gramos_dia > 50:
+                dias = int(round(falta * 1000 / gramos_dia))
+                if 0 < dias < 3650:
+                    aviso += f" A este ritmo, como en {dias} días."
+            lineas.append(aviso)
 
     lineas.append("")
     lineas.append("Si algo está mal, solo dime y lo corrijo.")

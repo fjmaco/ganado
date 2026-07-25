@@ -182,14 +182,41 @@ class ClienteOpenWA:
                 ]
             }
 
-        for existente in await self.listar_webhooks():
-            if existente.get("url") == url:
-                r = await http.put(f"/webhooks/{existente['id']}", json=cuerpo)
+        existentes = await self.listar_webhooks()
+        creado = await self._crear_o_actualizar(
+            existentes, cuerpo, lambda w: "message.received" in (w.get("events") or [])
+        )
+
+        # Session lifecycle goes on a SEPARATE webhook, with no filter.
+        #
+        # The filter above matches on `sender`, which only exists on message
+        # events — putting session events behind it would drop every one of
+        # them, and the whole point is to notice when the link dies. Two
+        # subscriptions is the only way to have both.
+        vigilancia = {
+            "url": url,
+            "events": [
+                "session.status", "session.disconnected",
+                "session.qr", "session.authenticated",
+            ],
+            "secret": secreto,
+            "retryCount": reintentos,
+        }
+        await self._crear_o_actualizar(
+            existentes, vigilancia,
+            lambda w: any(e.startswith("session.") for e in (w.get("events") or [])),
+        )
+        return creado
+
+    async def _crear_o_actualizar(self, existentes, cuerpo, coincide) -> dict:
+        http = await self._http()
+        for w in existentes:
+            if w.get("url") == cuerpo["url"] and coincide(w):
+                r = await http.put(f"/webhooks/{w['id']}", json=cuerpo)
                 r.raise_for_status()
                 datos = r.json()
                 datos["_actualizado"] = True
                 return datos
-
         r = await http.post("/webhooks", json=cuerpo)
         r.raise_for_status()
         return r.json()

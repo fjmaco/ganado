@@ -41,6 +41,7 @@ INTENCIONES = {
 CONSULTAS = {
     "hato", "total", "promedio", "minimo", "maximo",
     "mejor_ganancia", "peor_ganancia", "vaca", "sin_pesar", "alertas", "conteo",
+    "listas",
 }
 
 # Filler your dad naturally puts around the numbers. Stripping these is what
@@ -162,6 +163,8 @@ _REGLAS_CONSULTA: tuple[tuple[str, str], ...] = (
     (r"\b(engord|subi|gan|creci)\w*\b.*\b(menos|peor)\b", "peor_ganancia"),
     (r"\b(mejor|mas)\b.*\b(engord|subi|gan|creci)", "mejor_ganancia"),
     (r"\b(engord|subi|gan|creci)\w*\b.*\b(mas|mejor)\b", "mejor_ganancia"),
+    (r"\b(listas?|puedo vender|para vender|ya estan|llegaron al peso|"
+     r"en peso|peso de venta|listas para)\b", "listas"),
     (r"\bcuantas?\b.*" + _HATO, "conteo"),
     # Lo general de último: cualquier "cómo va / cuánto pesa / resumen" del hato.
     (r"\b(como va|como esta|como estan|como van|resumen|reporte|estado)\b.*" + _HATO, "hato"),

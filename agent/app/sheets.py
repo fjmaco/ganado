@@ -442,8 +442,12 @@ class RepositorioHato:
         # would silently make one animal's history look like another's.
         nombre = asignar_nombre({v.nombre for v in vacas.values() if v.nombre})
         await asyncio.to_thread(self._crear_vaca_sync, numero, nombre, hoy.isoformat())
-        self._cache_vacas = None
-        return Vaca(numero=numero, nombre=nombre, alta=hoy.isoformat())
+
+        nueva = Vaca(numero=numero, nombre=nombre, alta=hoy.isoformat())
+        if self._cache_vacas is not None:
+            sello, actuales = self._cache_vacas
+            self._cache_vacas = (sello, {**actuales, numero: nueva})
+        return nueva
 
     @_reintento
     def _retirar_sync(self, numero: str, motivo: str, cuando: str) -> bool:
@@ -551,8 +555,32 @@ class RepositorioHato:
 
     async def registrar(self, p: Pesaje) -> int:
         fila = await asyncio.to_thread(self._registrar_sync, p)
-        self._cache_reg = None
+
+        # Update the cache rather than dropping it. Dropping it meant every
+        # append forced the *next* message to re-read all 200+ rows, so one
+        # message carrying 30 cows cost ~150 API calls in a few seconds —
+        # against a 60/minute quota, during the one hour a month that matters.
+        # We know exactly what we just wrote, so we can just add it.
+        # The TTL still forces a genuine refresh, so a hand edit isn't missed
+        # for long.
+        if self._cache_reg is not None:
+            sello, filas = self._cache_reg
+            filas.append({
+                "fila": fila, "fecha": p.fecha, "vaca": p.vaca, "peso": p.peso,
+                "origen": p.origen, "msg_id": p.msg_id, "anulado": False,
+                "nota": p.nota,
+            })
+            self._cache_reg = (sello, filas)
         return fila
+
+    def _tocar_cache(self, fila: int, cambios: dict) -> None:
+        """Apply an edit to the cached row, keeping it in step with the sheet."""
+        if self._cache_reg is None:
+            return
+        for r in self._cache_reg[1]:
+            if r["fila"] == fila:
+                r.update(cambios)
+                break
 
     @_reintento
     def _actualizar_peso_sync(self, fila: int, peso: float) -> None:
@@ -561,7 +589,7 @@ class RepositorioHato:
 
     async def actualizar_peso(self, fila: int, peso: float) -> None:
         await asyncio.to_thread(self._actualizar_peso_sync, fila, peso)
-        self._cache_reg = None
+        self._tocar_cache(fila, {"peso": peso})
 
     @_reintento
     def _anular_sync(self, fila: int) -> None:
@@ -571,7 +599,7 @@ class RepositorioHato:
     async def anular(self, fila: int) -> None:
         """Cancel an entry without erasing it — history stays auditable."""
         await asyncio.to_thread(self._anular_sync, fila)
-        self._cache_reg = None
+        self._tocar_cache(fila, {"anulado": True})
 
     @_reintento
     def _leer_registros_sync(self) -> list[dict]:

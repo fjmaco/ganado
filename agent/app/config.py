@@ -91,6 +91,15 @@ class Config:
     # "are you sure?" instead of a silent write.
     salto_pct: float = field(default_factory=lambda: _float("SALTO_SOSPECHOSO_PCT", 20))
 
+    # Target sale weight. 0 disables every mention of it — he doesn't weigh
+    # cattle to know weights, he weighs to decide when to sell, so with this
+    # set the bot can answer the question underneath the question.
+    peso_objetivo: float = field(default_factory=lambda: _float("PESO_OBJETIVO_KG", 0))
+
+    @property
+    def hay_objetivo(self) -> bool:
+        return self.peso_objetivo > 0
+
     # --- Behaviour --------------------------------------------------------
     # Whisper can mishear spelled-out Spanish numbers, so voice entries ask
     # for confirmation until you've seen real accuracy on his voice.
@@ -108,6 +117,13 @@ class Config:
     resumen_activo: bool = field(default_factory=lambda: _bool("RESUMEN_MENSUAL", True))
     resumen_dia: int = field(default_factory=lambda: _int("RESUMEN_DIA", 1))
     resumen_hora: int = field(default_factory=lambda: _int("RESUMEN_HORA", 8))
+
+    # --- Latido semanal, sólo para el admin ------------------------------
+    # Un bot muerto entre pesajes se descubriría cuando él reclame, y como pesa
+    # una vez al mes eso puede ser semanas después.
+    latido_activo: bool = field(default_factory=lambda: _bool("LATIDO_SEMANAL", True))
+    latido_dia: int = field(default_factory=lambda: _int("LATIDO_DIA", 0))   # 0 = lunes
+    latido_hora: int = field(default_factory=lambda: _int("LATIDO_HORA", 8))
 
     # --- Plumbing ---------------------------------------------------------
     # Ceiling on one message end to end. Without it a hung provider call wedges

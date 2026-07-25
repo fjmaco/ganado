@@ -204,6 +204,97 @@ def resumen(
     return r
 
 
+@dataclass
+class Camino:
+    """A cow's progress toward the sale target."""
+    vaca: str
+    nombre: str | None
+    peso: float
+    falta: float
+    gramos_dia: float | None = None
+    dias: int | None = None
+    fecha: date | None = None
+
+
+def hacia_objetivo(
+    df: pd.DataFrame, nombres: dict[str, str], objetivo: float,
+    activas: set[str] | None = None,
+) -> tuple[list[Camino], list[Camino]]:
+    """Split the herd into (ready to sell, still growing).
+
+    For the ones still growing, project a date from their own recent rate —
+    not a herd average. A cow gaining 900 g/día and one gaining 200 are not
+    weeks apart, they're months.
+    """
+    marco = solo_activas(df, activas)
+    if marco.empty or objetivo <= 0:
+        return [], []
+
+    tasas = {g.vaca: g.gramos_dia for g in ganancias(marco, nombres, periodo="3meses")}
+    listas: list[Camino] = []
+    faltantes: list[Camino] = []
+
+    for _, fila in ultimos_pesos(marco).iterrows():
+        numero, peso = str(fila["vaca"]), float(fila["peso"])
+        c = Camino(
+            vaca=numero, nombre=nombres.get(numero) or None,
+            peso=peso, falta=objetivo - peso,
+        )
+        if peso >= objetivo:
+            listas.append(c)
+            continue
+
+        if (tasa := tasas.get(numero)) and tasa > 50:  # menos de 50 g/día no proyecta nada útil
+            c.gramos_dia = tasa
+            c.dias = int(round(c.falta * 1000 / tasa))
+            if 0 < c.dias < 3650:
+                c.fecha = date.today() + timedelta(days=c.dias)
+        faltantes.append(c)
+
+    listas.sort(key=lambda c: c.peso, reverse=True)
+    faltantes.sort(key=lambda c: (c.dias is None, c.dias or 9999))
+    return listas, faltantes
+
+
+def texto_objetivo(listas: list[Camino], faltantes: list[Camino], objetivo: float) -> str:
+    if not listas and not faltantes:
+        return SIN_DATOS_OBJETIVO
+
+    lineas = [f"🎯 *Peso de venta: {M.fmt_kg(objetivo)} kg*", ""]
+
+    if listas:
+        lineas.append(f"✅ *Ya están listas ({len(listas)}):*")
+        lineas += [
+            f"  • {M.etiqueta(c.vaca, c.nombre)} — {M.fmt_kg(c.peso)} kg "
+            f"({M.fmt_delta(-c.falta)} kg de más)"
+            for c in listas[:15]
+        ]
+        if len(listas) > 15:
+            lineas.append(f"  … y {len(listas) - 15} más")
+    else:
+        lineas.append("Todavía ninguna llegó al peso de venta.")
+
+    proximas = [c for c in faltantes if c.fecha][:5]
+    if proximas:
+        lineas += ["", "⏱️ *Las más próximas:*"]
+        for c in proximas:
+            lineas.append(
+                f"  • {M.etiqueta(c.vaca, c.nombre)} — le faltan {M.fmt_kg(c.falta)} kg, "
+                f"como en {c.dias} días (≈ {M.fecha_corta(c.fecha)})"
+            )
+
+    sin_ritmo = [c for c in faltantes if not c.fecha]
+    if sin_ritmo:
+        lineas += ["", f"❓ {len(sin_ritmo)} sin ritmo suficiente para estimar fecha."]
+
+    return "\n".join(lineas)
+
+
+SIN_DATOS_OBJETIVO = (
+    "📭 Todavía no tengo pesajes suficientes para decirte cuáles están listas."
+)
+
+
 def historia(registros: list[dict], vaca: str) -> list[tuple[date, float]]:
     df = _marco(registros)
     if df.empty:

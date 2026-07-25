@@ -14,7 +14,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from datetime import datetime
+from datetime import datetime, timedelta
 
 from . import reportes
 from .config import cfg
@@ -82,6 +82,75 @@ async def enviar_resumen(ahora: datetime) -> bool:
     return bool(enviados)
 
 
+# --------------------------------------------------------------------------
+# Latido semanal, para mí — no para mi papá
+# --------------------------------------------------------------------------
+
+CLAVE_LATIDO = "ultimo_latido_semanal"
+
+
+async def _texto_latido(ahora: datetime) -> str:
+    from . import sesion
+
+    vacas = await hato.vacas(refrescar=True)
+    registros = await hato.registros(refrescar=True)
+    activas = [v for v in vacas.values() if v.activa]
+
+    hace7 = (ahora - timedelta(days=7)).date()
+    hace30 = (ahora - timedelta(days=30)).date()
+    semana = [r for r in registros if r["fecha"] >= hace7]
+    mes = [r for r in registros if r["fecha"] >= hace30]
+
+    cola = await db.profundidad()
+    wa = await sesion.estado_actual()
+    ultimo = max((r["fecha"] for r in registros), default=None)
+
+    lineas = [
+        f"📟 *Pericos sigue vivo* — {ahora:%d/%m}",
+        "",
+        f"Hato: {len(activas)} vacas activas"
+        + (f" ({len(vacas) - len(activas)} de baja)" if len(vacas) > len(activas) else ""),
+        f"Pesajes: {len(semana)} esta semana · {len(mes)} en 30 días",
+        f"Último pesaje: {ultimo or 'nunca'}",
+        f"WhatsApp: {wa['estado']}",
+        f"Cola: {cola or 'vacía'}"
+        + (f"  ⚠️ {cola['fallido']} fallidos" if cola.get("fallido") else ""),
+    ]
+
+    # La señal que de verdad importa: ¿lo está usando?
+    if not semana:
+        dias = (ahora.date() - ultimo).days if ultimo else None
+        lineas += ["", "🔕 *Nada esta semana.*" + (
+            f" Van {dias} días sin un pesaje." if dias else " Todavía sin usar."
+        )]
+        lineas.append("_Si eso no cuadra con lo que él cree que mandó, algo está roto._")
+    else:
+        cuantas = len({r["vaca"] for r in semana})
+        lineas += ["", f"✅ Registró {cuantas} vacas distintas esta semana."]
+
+    return "\n".join(lineas)
+
+
+async def _toca_latido(ahora: datetime) -> bool:
+    if not cfg.latido_activo or not cfg.admin_whatsapp:
+        return False
+    if ahora.weekday() != cfg.latido_dia or ahora.hour < cfg.latido_hora:
+        return False
+    return await db.leer_ajuste(CLAVE_LATIDO) != ahora.strftime("%Y-W%W")
+
+
+async def enviar_latido(ahora: datetime) -> bool:
+    """Weekly proof-of-life to you, so a dead bot doesn't go unnoticed a month."""
+    try:
+        cuerpo = await _texto_latido(ahora)
+        await openwa.enviar_texto(f"{cfg.admin_whatsapp}@c.us", cuerpo)
+    except Exception as e:  # noqa: BLE001
+        log.error("no se pudo mandar el latido semanal: %s", e)
+        return False
+    await db.guardar_ajuste(CLAVE_LATIDO, ahora.strftime("%Y-W%W"))
+    return True
+
+
 async def bucle(parar: asyncio.Event) -> None:
     log.info(
         "agenda iniciada · resumen el día %d a las %02d:00 (%s)",
@@ -93,6 +162,9 @@ async def bucle(parar: asyncio.Event) -> None:
             if await _toca_ahora(ahora):
                 log.info("mandando el resumen mensual")
                 await enviar_resumen(ahora)
+            if await _toca_latido(ahora):
+                log.info("mandando el latido semanal")
+                await enviar_latido(ahora)
         except Exception as e:  # noqa: BLE001 — nunca tumbar el bucle
             log.exception("fallo en la agenda: %s", e)
 

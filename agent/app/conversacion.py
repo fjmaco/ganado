@@ -104,6 +104,7 @@ async def _escribir(
         peso_previo=previo["peso"] if previo else None,
         fecha_previa=previo["fecha"] if previo else None,
         gramos_dia=gramos,
+        objetivo=cfg.peso_objetivo,
     )
     return texto, previo
 
@@ -304,6 +305,19 @@ async def _consultar(ctx: Contexto, consulta: Consulta, vacas: dict[str, Vaca]) 
     elif tipo == "sin_pesar":
         marco = reportes._marco(registros)
         cuerpo = reportes.texto_sin_pesar(reportes.sin_pesar(marco, activas))
+
+    elif tipo == "listas":
+        if not cfg.hay_objetivo:
+            return (
+                "🤔 Todavía no me has dicho a qué peso vendes.\n\n"
+                "Cuando lo configures te digo cuáles ya están listas y cuáles "
+                "van más cerca."
+            )
+        marco = reportes._marco(registros)
+        listas, faltantes = reportes.hacia_objetivo(
+            marco, nombres, cfg.peso_objetivo, activas_set
+        )
+        cuerpo = reportes.texto_objetivo(listas, faltantes, cfg.peso_objetivo)
 
     elif tipo == "alertas":
         marco = reportes.solo_activas(reportes._marco(registros), activas_set)
